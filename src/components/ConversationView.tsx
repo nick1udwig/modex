@@ -1,91 +1,103 @@
 import { useEffect, useRef } from 'react';
 import type { ChatThread } from '../app/types';
+import { HighlightedText } from './HighlightedText';
+import { Icon } from './Icon';
 
 interface ConversationViewProps {
-  chat: ChatThread | null;
-  draft: string;
+  activeSearchHitId?: string | null;
   busy: boolean;
-  error: string | null;
-  onDraftChange: (value: string) => void;
-  onSend: () => void;
+  chat: ChatThread | null;
+  loading: boolean;
+  searchQuery: string;
 }
 
-const formatTimestamp = (iso: string) =>
+const formatMeta = (iso: string) =>
   new Intl.DateTimeFormat(undefined, {
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(iso));
 
-export const ConversationView = ({
-  chat,
-  draft,
-  busy,
-  error,
-  onDraftChange,
-  onSend,
-}: ConversationViewProps) => {
+const messageLabel = (role: ChatThread['messages'][number]['role']) => {
+  if (role === 'assistant') {
+    return 'Codex';
+  }
+
+  if (role === 'system') {
+    return 'System';
+  }
+
+  return 'You';
+};
+
+export const ConversationView = ({ activeSearchHitId = null, busy, chat, loading, searchQuery }: ConversationViewProps) => {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [chat?.id, chat?.messages.length]);
+    if (searchQuery.trim().length > 0) {
+      return;
+    }
 
-  if (!chat) {
-    return (
-      <section className="conversation conversation--empty">
-        <p className="eyebrow">No active tab</p>
-        <h2>Open a chat from the sidebar or restore one of your saved tabs.</h2>
-      </section>
-    );
-  }
+    bottomRef.current?.scrollIntoView({ block: 'end' });
+  }, [chat?.id, chat?.messages.length, busy, searchQuery]);
+
+  useEffect(() => {
+    if (!activeSearchHitId) {
+      return;
+    }
+
+    const node = document.getElementById(activeSearchHitId);
+    node?.scrollIntoView({
+      block: 'center',
+      inline: 'nearest',
+    });
+  }, [activeSearchHitId]);
 
   return (
-    <section className="conversation">
-      <header className="conversation__header">
-        <div>
-          <p className="eyebrow">Remote session</p>
-          <h2>{chat.title}</h2>
-        </div>
-        <p className="conversation__status">{busy ? 'Running…' : 'Idle'}</p>
-      </header>
-
-      <div className="message-list">
-        {chat.messages.map((message) => (
-          <article key={message.id} className={`message-card ${message.role}`}>
-            <div className="message-card__meta">
-              <span>{message.role}</span>
-              <time>{formatTimestamp(message.createdAt)}</time>
-            </div>
-            <p>{message.content}</p>
-          </article>
-        ))}
-        <div ref={bottomRef} />
+    <section className="chat-screen">
+      <div className="model-row">
+        <span className="model-row__label">GPT-5.2 / high</span>
+        <span className="model-row__meta">{chat?.tokenUsageLabel ?? 'Live session'}</span>
       </div>
 
-      <div className="composer">
-        {error ? <p className="error-banner">{error}</p> : null}
-        <label className="composer__label" htmlFor="composer-input">
-          Message
-        </label>
-        <textarea
-          id="composer-input"
-          rows={4}
-          value={draft}
-          placeholder="Ask the remote app-server to inspect, edit, or summarize work."
-          onChange={(event) => onDraftChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (!busy && (event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-              event.preventDefault();
-              onSend();
-            }
-          }}
-        />
-        <div className="composer__actions">
-          <p>Cmd/Ctrl + Enter to send</p>
-          <button className="primary-button" type="button" onClick={onSend} disabled={busy}>
-            {busy ? 'Waiting…' : 'Send'}
-          </button>
-        </div>
+      <div className="message-list">
+        {loading ? <div className="message-empty">Syncing chats from the app-server.</div> : null}
+
+        {!loading && !chat ? (
+          <div className="message-empty">Open a chat from the drawer or create a fresh tab to continue.</div>
+        ) : null}
+
+        {busy ? (
+          <div className="run-row">
+            <Icon name="loader" size={14} spin />
+            <span>Agent running • {chat?.title ?? 'active session'}</span>
+          </div>
+        ) : null}
+
+        {chat?.messages.filter((message) => message.role !== 'system').map((message, index, messages) => {
+          const isLastAssistant = message.role === 'assistant' && index === messages.length - 1;
+          const isEnteringUserMessage = message.role === 'user' && message.id.startsWith('optimistic-');
+
+          return (
+            <div
+              key={message.id}
+              className={`message-card message-card--${message.role} ${
+                isEnteringUserMessage ? 'message-card--enter' : ''
+              }`}
+              aria-label={`${messageLabel(message.role)} message`}
+            >
+              <p>
+                <HighlightedText
+                  activeHitId={activeSearchHitId}
+                  hitIdPrefix={`search-hit-${message.id}`}
+                  query={searchQuery}
+                  text={message.content}
+                />
+              </p>
+              {isLastAssistant ? <span className="message-card__meta">{formatMeta(chat.updatedAt)}</span> : null}
+            </div>
+          );
+        })}
+        <div ref={bottomRef} />
       </div>
     </section>
   );

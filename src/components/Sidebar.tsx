@@ -1,67 +1,127 @@
+import { useEffect, useRef } from 'react';
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import type { ChatSummary } from '../app/types';
+import { HighlightedText } from './HighlightedText';
+import { Icon } from './Icon';
 
 interface SidebarProps {
-  chats: ChatSummary[];
   activeChatId: string | null;
-  openTabs: string[];
-  isOpen: boolean;
-  loading: boolean;
+  chats: ChatSummary[];
+  dragging: boolean;
   onClose: () => void;
   onCreateChat: () => void;
+  onPanelPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerCancel: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
   onSelectChat: (chatId: string) => void;
+  phase: 'opening' | 'open' | 'closing';
+  registerPanel?: (node: HTMLElement | null) => void;
+  searchQuery: string;
+  selectedSearchChatId?: string | null;
+  style?: CSSProperties;
 }
 
-const relativeTime = (iso: string) =>
-  new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(
-    Math.round((new Date(iso).getTime() - Date.now()) / (1000 * 60)),
-    'minute',
-  );
+const relativeDay = (iso: string) => {
+  const delta = Math.round((new Date(iso).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(delta, 'day');
+};
 
 export const Sidebar = ({
-  chats,
   activeChatId,
-  openTabs,
-  isOpen,
-  loading,
+  chats,
+  dragging,
   onClose,
   onCreateChat,
+  onPanelPointerDown,
+  onPointerCancel,
+  onPointerMove,
+  onPointerUp,
   onSelectChat,
-}: SidebarProps) => (
-  <>
-    <div className={`sidebar-scrim ${isOpen ? 'visible' : ''}`} onClick={onClose} />
-    <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
-      <div className="sidebar__header">
-        <div>
-          <p className="eyebrow">Threads</p>
-          <h1>Modex</h1>
-        </div>
-        <button className="secondary-button" type="button" onClick={onCreateChat} disabled={loading}>
-          New chat
-        </button>
-      </div>
+  phase,
+  registerPanel,
+  searchQuery,
+  selectedSearchChatId = null,
+  style,
+}: SidebarProps) => {
+  const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
-      <div className="sidebar__list">
-        {chats.map((chat) => {
-          const isActive = chat.id === activeChatId;
-          const isOpenInTabs = openTabs.includes(chat.id);
+  useEffect(() => {
+    if (!selectedSearchChatId) {
+      return;
+    }
 
-          return (
-            <button
-              key={chat.id}
-              className={`chat-row ${isActive ? 'active' : ''}`}
-              type="button"
-              onClick={() => onSelectChat(chat.id)}
-            >
-              <div className="chat-row__main">
-                <span className="chat-row__title">{chat.title}</span>
-                {isOpenInTabs ? <span className="chat-row__badge">Open</span> : null}
-              </div>
-              <span className="chat-row__preview">{chat.preview}</span>
-              <span className="chat-row__meta">{relativeTime(chat.updatedAt)}</span>
+    itemRefs.current[selectedSearchChatId]?.scrollIntoView({
+      block: 'nearest',
+    });
+  }, [selectedSearchChatId]);
+
+  return (
+    <section
+      className={`drawer-screen drawer-screen--${phase} ${dragging ? 'drawer-screen--dragging' : ''}`}
+      style={style}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+    >
+      <div className="drawer-overlay">
+        <aside
+          ref={registerPanel}
+          className="drawer-panel"
+          aria-label="All chats"
+          onPointerDown={onPanelPointerDown}
+        >
+          <div className="drawer-panel__top">
+            <button className="drawer-top__back" type="button" onClick={onClose} aria-label="Back to chat">
+              <Icon name="arrow-left" size={17} />
             </button>
-          );
-        })}
+
+            <span className="drawer-top__title">All Chats</span>
+
+            <button className="drawer-top__create" type="button" onClick={onCreateChat} aria-label="Create new chat">
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+
+          <div className="drawer-list">
+            {chats.map((chat) => {
+              const active = chat.id === activeChatId;
+              const searchActive = searchQuery.trim().length > 0;
+
+              return (
+                <button
+                  key={chat.id}
+                  ref={(node) => {
+                    itemRefs.current[chat.id] = node;
+                  }}
+                  className={`drawer-list__item ${active ? 'drawer-list__item--active' : ''} ${
+                    selectedSearchChatId === chat.id ? 'drawer-list__item--search' : ''
+                  }`}
+                  type="button"
+                  onClick={() => onSelectChat(chat.id)}
+                >
+                  <span className="drawer-list__title">
+                    <HighlightedText query={searchQuery} text={chat.title} />
+                  </span>
+                  {searchActive ? (
+                    <span className="drawer-list__preview">
+                      <HighlightedText query={searchQuery} text={chat.preview} />
+                    </span>
+                  ) : null}
+                  <span className="drawer-list__meta">{active ? relativeDay(chat.updatedAt) : chat.status === 'running' ? 'Running' : 'Ready'}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="drawer-user">
+            <span className="drawer-user__avatar" aria-hidden="true" />
+            <span className="drawer-user__name">Nick Ludwig</span>
+          </div>
+        </aside>
+
+        <button className="drawer-scrim" type="button" onClick={onClose} aria-label="Close chats list" />
       </div>
-    </aside>
-  </>
-);
+    </section>
+  );
+};
