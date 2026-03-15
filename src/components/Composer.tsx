@@ -10,6 +10,7 @@ interface ComposerProps {
   draft: string;
   error: string | null;
   footerAction: FooterAction;
+  inputDisabled?: boolean;
   maskFooterAction?: boolean;
   onCloseSearch: () => void;
   onCreateChat: () => void;
@@ -21,8 +22,10 @@ interface ComposerProps {
   onSearchPrevious: () => void;
   onSearchQueryChange: (value: string) => void;
   onSend: () => void;
+  onToggleVoiceInput: () => void;
   onToggleAccessMode: (mode: AccessMode) => void;
   openTabCount: number;
+  recording: boolean;
   registerFooterActionNode?: (node: HTMLButtonElement | null) => void;
   searchActive: boolean;
   searchHitLabel: string | null;
@@ -35,6 +38,7 @@ export const Composer = ({
   draft,
   error,
   footerAction,
+  inputDisabled = false,
   maskFooterAction = false,
   onCloseSearch,
   onCreateChat,
@@ -46,8 +50,10 @@ export const Composer = ({
   onSearchPrevious,
   onSearchQueryChange,
   onSend,
+  onToggleVoiceInput,
   onToggleAccessMode,
   openTabCount,
+  recording,
   registerFooterActionNode,
   searchActive,
   searchHitLabel,
@@ -57,6 +63,7 @@ export const Composer = ({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const hasDraft = draft.trim().length > 0;
+  const showSend = !searchActive && hasDraft && !recording;
 
   useEffect(() => {
     if (!inputRef.current) {
@@ -117,10 +124,15 @@ export const Composer = ({
             ref={inputRef}
             rows={1}
             value={searchActive ? searchQuery : draft}
+            disabled={inputDisabled}
             placeholder={searchActive ? 'Search query' : 'Ask anything'}
             aria-label={searchActive ? 'Search query' : 'Ask anything'}
             onChange={(event) => (searchActive ? onSearchQueryChange(event.target.value) : onDraftChange(event.target.value))}
             onKeyDown={(event) => {
+              if (inputDisabled) {
+                return;
+              }
+
               if (searchActive) {
                 if (event.key === 'Enter' && !event.shiftKey) {
                   event.preventDefault();
@@ -139,17 +151,23 @@ export const Composer = ({
           />
 
           <button
-            className={`composer-send ${!searchActive && hasDraft ? 'composer-send--active' : ''}`}
+            className={`composer-send ${showSend ? 'composer-send--active' : ''} ${
+              recording ? 'composer-send--recording' : ''
+            }`}
             type="button"
             onClick={() => {
-              if (!searchActive && hasDraft && !busy) {
+              if (showSend && !busy) {
                 onSend();
+                return;
               }
+
+              onToggleVoiceInput();
             }}
-            aria-label={!searchActive && hasDraft ? 'Send message' : 'Voice input'}
-            aria-disabled={!searchActive && (!hasDraft || busy)}
+            aria-label={showSend ? 'Send message' : recording ? 'Stop voice input' : 'Voice input'}
+            aria-pressed={recording}
+            aria-disabled={showSend ? busy : false}
           >
-            <Icon name={!searchActive && hasDraft ? 'arrow-up' : 'mic'} size={16} />
+            <Icon name={showSend ? 'arrow-up' : 'mic'} size={16} />
           </button>
         </div>
       </div>

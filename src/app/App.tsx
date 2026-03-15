@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { searchSummaries, searchThreadMessages } from './search';
 import type { ChatRuntimeSettings } from './types';
+import { useRealtimeTranscription } from './useRealtimeTranscription';
 import { Composer } from '../components/Composer';
 import { ConversationView } from '../components/ConversationView';
 import { Icon } from '../components/Icon';
@@ -9,6 +10,7 @@ import { RuntimeSettingsSheet } from '../components/RuntimeSettingsSheet';
 import { Sidebar } from '../components/Sidebar';
 import { TabsBar } from '../components/TabsBar';
 import { createAppServerClient } from '../services/appServerClient';
+import { createSidecarFilesystemClient } from '../services/sidecarClient';
 import { useModexApp } from '../state/useModexApp';
 
 type Surface = 'chat' | 'tabs';
@@ -68,7 +70,9 @@ const cloneSettings = (settings: ChatRuntimeSettings): ChatRuntimeSettings => ({
 
 export const App = () => {
   const client = useMemo(() => createAppServerClient(), []);
+  const filesystemClient = useMemo(() => createSidecarFilesystemClient(), []);
   const modex = useModexApp(client);
+  const transcription = useRealtimeTranscription();
   const [surface, setSurface] = useState<Surface>('chat');
   const [drawerPhase, setDrawerPhase] = useState<DrawerPhase>('closed');
   const [drawerDragging, setDrawerDragging] = useState(false);
@@ -90,6 +94,11 @@ export const App = () => {
   const activeTab = modex.openTabs.find((tab) => tab.chatId === modex.activeChatId);
   const isBusy = activeTab?.status === 'running';
   const transitionChatId = paneTransition?.chatId ?? null;
+  const liveDraft =
+    transcription.session?.target === 'draft' && transcription.session.chatId === modex.activeChatId
+      ? transcription.composedText
+      : modex.draft;
+  const liveSearchQuery = transcription.session?.target === 'search' ? transcription.composedText : searchQuery;
 
   useEffect(() => {
     drawerProgressRef.current = drawerProgress;
@@ -105,6 +114,8 @@ export const App = () => {
     },
     [],
   );
+
+  useEffect(() => () => filesystemClient.close(), [filesystemClient]);
 
   const scheduleTimeout = (callback: () => void, delay: number) => {
     const timeoutId = window.setTimeout(() => {
@@ -388,6 +399,7 @@ export const App = () => {
       return;
     }
 
+    commitTranscription();
     closeDrawer();
     await modex.activateChat(chatId);
     setSurface('chat');
@@ -398,6 +410,7 @@ export const App = () => {
       return null;
     }
 
+    commitTranscription();
     closeDrawer();
     const thread = await modex.createChat(settings);
     if (thread) {
@@ -411,6 +424,7 @@ export const App = () => {
       return;
     }
 
+    commitTranscription();
     const transform = getTransformFromNode(footerActionNodeRef.current, { clampToStage: true });
     const thread = await modex.createChat(settings);
     if (!thread) {
@@ -425,6 +439,7 @@ export const App = () => {
       return;
     }
 
+    commitTranscription();
     closeDrawer();
 
     const chatId = modex.activeChatId ?? modex.openTabs[0]?.chatId;
@@ -476,6 +491,7 @@ export const App = () => {
       return;
     }
 
+    commitTranscription();
     closeDrawer();
     void modex.activateChat(chatId);
     runChatExpandTransition(chatId, getTransformFromNode(tabNodeMapRef.current.get(chatId)), 'tab');
@@ -500,6 +516,7 @@ export const App = () => {
   };
 
   const requestCreateChat = (origin: CreateSheetOrigin) => {
+    commitTranscription();
     setSettingsSheet({
       mode: 'create',
       open: true,
@@ -513,6 +530,7 @@ export const App = () => {
       return;
     }
 
+    commitTranscription();
     setSettingsSheet({
       chatId: modex.activeChatId,
       mode: 'edit',
@@ -569,11 +587,57 @@ export const App = () => {
   const drawerStyle = {
     '--drawer-progress': `${drawerProgress}`,
   } as CSSProperties;
+  const commitTranscription = (persist = true) => {
+    const activeSession = transcription.session;
+    if (!activeSession) {
+      return '';
+    }
+
+    const nextText = transcription.stop();
+    if (!persist) {
+      return nextText;
+    }
+
+    if (activeSession.target === 'search') {
+      setSearchQuery(nextText);
+      return nextText;
+    }
+
+    if (activeSession.chatId) {
+      modex.setDraftForChat(activeSession.chatId, nextText);
+    }
+
+    return nextText;
+  };
+  const toggleVoiceInput = () => {
+    if (transcription.active) {
+      commitTranscription();
+      return;
+    }
+
+    if (searchActive) {
+      void transcription.start({
+        baseText: liveSearchQuery,
+        target: 'search',
+      });
+      return;
+    }
+
+    if (!modex.activeChatId) {
+      return;
+    }
+
+    void transcription.start({
+      baseText: modex.draft,
+      chatId: modex.activeChatId,
+      target: 'draft',
+    });
+  };
 
   const searchContext: SearchContext = drawerVisible ? 'chats' : surface === 'tabs' ? 'tabs' : 'chat';
-  const effectiveChatSearchQuery = searchActive && searchContext === 'chat' ? searchQuery : '';
-  const effectiveChatsSearchQuery = searchActive && searchContext === 'chats' ? searchQuery : '';
-  const effectiveTabsSearchQuery = searchActive && searchContext === 'tabs' ? searchQuery : '';
+  const effectiveChatSearchQuery = searchActive && searchContext === 'chat' ? liveSearchQuery : '';
+  const effectiveChatsSearchQuery = searchActive && searchContext === 'chats' ? liveSearchQuery : '';
+  const effectiveTabsSearchQuery = searchActive && searchContext === 'tabs' ? liveSearchQuery : '';
   const chatSearch = useMemo(
     () => searchThreadMessages(modex.activeChat, effectiveChatSearchQuery),
     [effectiveChatSearchQuery, modex.activeChat],
@@ -609,6 +673,19 @@ export const App = () => {
     effectiveTabsSearchQuery.trim().length > 0
       ? modex.openTabs.filter((tab) => tabsSearch.some((result) => result.chatId === tab.chatId))
       : modex.openTabs;
+
+  useEffect(() => {
+    const activeSession = transcription.session;
+    if (!activeSession || activeSession.target !== 'draft' || !activeSession.chatId) {
+      return;
+    }
+
+    if (activeSession.chatId === modex.activeChatId) {
+      return;
+    }
+
+    commitTranscription();
+  }, [modex.activeChatId, transcription.session]);
 
   const searchTotal =
     searchContext === 'chat'
@@ -759,11 +836,13 @@ export const App = () => {
           <Composer
             accessMode={modex.activeChatSettings?.accessMode ?? null}
             busy={Boolean(isBusy)}
-            draft={modex.draft}
-            error={modex.error}
+            draft={liveDraft}
+            error={transcription.error ?? modex.error}
             footerAction={composerSurface === 'tabs' ? 'new-tab' : 'tabs'}
+            inputDisabled={transcription.active}
             maskFooterAction={paneTransition?.origin === 'footer-action'}
             onCloseSearch={() => {
+              commitTranscription(false);
               setSearchActive(false);
               setSearchIndex(0);
               setSearchQuery('');
@@ -772,6 +851,7 @@ export const App = () => {
             onDraftChange={modex.setDraft}
             onEditDirectories={requestEditDirectories}
             onOpenSearch={() => {
+              commitTranscription();
               setSearchActive(true);
             }}
             onOpenTabs={openTabs}
@@ -779,16 +859,19 @@ export const App = () => {
             onSearchPrevious={() => stepSearch(-1)}
             onSearchQueryChange={setSearchQuery}
             onSend={() => void modex.sendMessage()}
+            onToggleVoiceInput={toggleVoiceInput}
             onToggleAccessMode={applyAccessMode}
             openTabCount={modex.openTabs.length}
+            recording={transcription.active}
             registerFooterActionNode={registerFooterActionNode}
             searchActive={searchActive}
             searchHitLabel={searchHitLabel}
-            searchQuery={searchQuery}
+            searchQuery={liveSearchQuery}
           />
         </div>
 
         <RuntimeSettingsSheet
+          filesystemClient={filesystemClient}
           mode={settingsSheet.open && settingsSheet.mode === 'edit' ? 'edit' : 'create'}
           open={settingsSheet.open}
           recentRoots={recentRoots}

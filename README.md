@@ -26,18 +26,38 @@ VITE_CODEX_APP_SERVER_URL=ws://127.0.0.1:4222
 # VITE_CODEX_APP_SERVER_MODEL_PROVIDER=openai
 # VITE_CODEX_APP_SERVER_SANDBOX=workspace-write
 # VITE_CODEX_APP_SERVER_APPROVAL_POLICY=never
+# VITE_MODEX_SIDECAR_URL=ws://127.0.0.1:4230
+# VITE_MODEX_SIDECAR_TOKEN=
 ```
 
 Notes:
 
 - `VITE_CODEX_APP_SERVER_URL` should be `wss://...` in production.
 - The frontend defaults `VITE_CODEX_APP_SERVER_APPROVAL_POLICY` to `never` because this UI does not yet implement app-server approval prompts.
+- The frontend defaults `VITE_MODEX_SIDECAR_URL` to `ws://127.0.0.1:4230`.
+- For sidecar auth without rebuilding, the app also accepts `?sidecarToken=...` / `?sidecarUrl=...` query params or `localStorage` keys `modex.sidecar.token` / `modex.sidecar.url`.
 
 Build for production:
 
 ```bash
 npm run build
 ```
+
+## Go Sidecar
+
+The repo now also contains `modex-sidecar`, a Go WebSocket service for capabilities that the Codex app-server does not currently expose directly:
+
+- Remote filesystem browsing for the directory picker.
+- Server-side proxying to OpenAI Realtime transcription WebSockets.
+
+Run it with:
+
+```bash
+cd backend/sidecar
+go run ./cmd/modex-sidecar
+```
+
+Protocol and env details: [backend/sidecar/README.md](/home/nick/git/modex/backend/sidecar/README.md)
 
 ## Architecture
 

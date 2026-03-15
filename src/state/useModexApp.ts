@@ -333,6 +333,16 @@ export const useModexApp = (client: RemoteAppClient) => {
     });
   };
 
+  const setDraftForChat = (chatId: string, value: string) => {
+    setState((current) => ({
+      ...current,
+      draftsByChatId: {
+        ...current.draftsByChatId,
+        [chatId]: value,
+      },
+    }));
+  };
+
   const activateChat = async (chatId: string) => {
     setState((current) => ({
       ...current,
@@ -522,6 +532,7 @@ export const useModexApp = (client: RemoteAppClient) => {
       sendMessage,
       setChatSettings,
       setDraft,
+      setDraftForChat,
     }),
     [activeChat, activeChatSettings, activeDraft, state],
   );
