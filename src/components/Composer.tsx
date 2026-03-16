@@ -77,6 +77,7 @@ export const Composer = ({
   const showStop = busy && !recording;
   const showSend = !showStop && !searchActive && hasDraft && !recording;
   const recordingLabel = recordingStatus === 'connecting' ? 'Starting voice' : 'Transcribing';
+  const stopLabel = 'Stop run';
 
   useEffect(() => {
     if (!inputRef.current) {
@@ -202,6 +203,7 @@ export const Composer = ({
             aria-disabled={showSend ? busy : false}
           >
             <Icon name={showStop ? 'x' : showSend ? 'arrow-up' : 'mic'} size={16} />
+            {showStop ? <span className="composer-send__label">{stopLabel}</span> : null}
             {recording ? <span className="composer-send__label">{recordingLabel}</span> : null}
           </button>
         </div>

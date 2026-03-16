@@ -1097,8 +1097,23 @@ textarea:disabled {
 }
 
 .composer-send--stop {
+  width: auto;
+  min-width: 36px;
+  padding: 0 14px 0 12px;
+  border-radius: 999px;
+  gap: 8px;
   color: #ffb09a;
   background: rgba(255, 92, 51, 0.12);
+  box-shadow: 0 0 0 1px rgba(255, 92, 51, 0.24);
+}
+
+.composer-send--stop .composer-send__label {
+  display: inline;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .footer-nav {
