@@ -840,7 +840,9 @@ export const App = () => {
             error={transcription.error ?? modex.error}
             footerAction={composerSurface === 'tabs' ? 'new-tab' : 'tabs'}
             inputDisabled={transcription.active}
+            interactionRequest={modex.activeInteraction}
             maskFooterAction={paneTransition?.origin === 'footer-action'}
+            onApprovalDecision={(decision) => void modex.respondToApproval(decision)}
             onCloseSearch={() => {
               commitTranscription(false);
               setSearchActive(false);
@@ -859,10 +861,13 @@ export const App = () => {
             onSearchPrevious={() => stepSearch(-1)}
             onSearchQueryChange={setSearchQuery}
             onSend={() => void modex.sendMessage()}
+            onStopRun={() => void modex.interruptTurn()}
+            onSubmitUserInput={(answers) => void modex.submitUserInput(answers)}
             onToggleVoiceInput={toggleVoiceInput}
             onToggleAccessMode={applyAccessMode}
             openTabCount={modex.openTabs.length}
             recording={transcription.active}
+            recordingStatus={transcription.session?.status ?? null}
             registerFooterActionNode={registerFooterActionNode}
             searchActive={searchActive}
             searchHitLabel={searchHitLabel}

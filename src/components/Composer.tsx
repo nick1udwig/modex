@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AccessMode } from '../app/types';
+import type { AccessMode, ApprovalDecision, InteractionRequest } from '../app/types';
 import { Icon } from './Icon';
+import { InteractionPrompt } from './InteractionPrompt';
 
 type FooterAction = 'tabs' | 'new-tab';
 
@@ -11,7 +12,9 @@ interface ComposerProps {
   error: string | null;
   footerAction: FooterAction;
   inputDisabled?: boolean;
+  interactionRequest: InteractionRequest | null;
   maskFooterAction?: boolean;
+  onApprovalDecision: (decision: ApprovalDecision) => void;
   onCloseSearch: () => void;
   onCreateChat: () => void;
   onDraftChange: (value: string) => void;
@@ -22,10 +25,13 @@ interface ComposerProps {
   onSearchPrevious: () => void;
   onSearchQueryChange: (value: string) => void;
   onSend: () => void;
+  onStopRun: () => void;
+  onSubmitUserInput: (answers: Record<string, string[]>) => void;
   onToggleVoiceInput: () => void;
   onToggleAccessMode: (mode: AccessMode) => void;
   openTabCount: number;
   recording: boolean;
+  recordingStatus?: 'connecting' | 'recording' | null;
   registerFooterActionNode?: (node: HTMLButtonElement | null) => void;
   searchActive: boolean;
   searchHitLabel: string | null;
@@ -39,7 +45,9 @@ export const Composer = ({
   error,
   footerAction,
   inputDisabled = false,
+  interactionRequest,
   maskFooterAction = false,
+  onApprovalDecision,
   onCloseSearch,
   onCreateChat,
   onDraftChange,
@@ -50,10 +58,13 @@ export const Composer = ({
   onSearchPrevious,
   onSearchQueryChange,
   onSend,
+  onStopRun,
+  onSubmitUserInput,
   onToggleVoiceInput,
   onToggleAccessMode,
   openTabCount,
   recording,
+  recordingStatus = null,
   registerFooterActionNode,
   searchActive,
   searchHitLabel,
@@ -63,15 +74,17 @@ export const Composer = ({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const hasDraft = draft.trim().length > 0;
-  const showSend = !searchActive && hasDraft && !recording;
+  const showStop = busy && !recording;
+  const showSend = !showStop && !searchActive && hasDraft && !recording;
+  const recordingLabel = recordingStatus === 'connecting' ? 'Starting voice' : 'Transcribing';
 
   useEffect(() => {
     if (!inputRef.current) {
       return;
     }
 
-    inputRef.current.style.height = '20px';
-    inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 72)}px`;
+    inputRef.current.style.height = '24px';
+    inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 96)}px`;
   }, [draft, searchActive, searchQuery]);
 
   useEffect(() => {
@@ -107,6 +120,14 @@ export const Composer = ({
 
   return (
     <div ref={composerRef} className={`composer-shell ${searchActive ? 'composer-shell--search' : ''}`}>
+      {interactionRequest ? (
+        <InteractionPrompt
+          request={interactionRequest}
+          onApprovalDecision={onApprovalDecision}
+          onSubmitUserInput={onSubmitUserInput}
+        />
+      ) : null}
+
       {error ? <p className="composer-error">{error}</p> : null}
 
       <div className="composer-row">
@@ -153,9 +174,14 @@ export const Composer = ({
           <button
             className={`composer-send ${showSend ? 'composer-send--active' : ''} ${
               recording ? 'composer-send--recording' : ''
-            }`}
+            } ${showStop ? 'composer-send--stop' : ''}`}
             type="button"
             onClick={() => {
+              if (showStop) {
+                onStopRun();
+                return;
+              }
+
               if (showSend && !busy) {
                 onSend();
                 return;
@@ -163,11 +189,20 @@ export const Composer = ({
 
               onToggleVoiceInput();
             }}
-            aria-label={showSend ? 'Send message' : recording ? 'Stop voice input' : 'Voice input'}
-            aria-pressed={recording}
+            aria-label={
+              showStop
+                ? 'Stop current run'
+                : showSend
+                  ? 'Send message'
+                  : recording
+                    ? `${recordingLabel}. Tap to stop voice input`
+                    : 'Voice input'
+            }
+            aria-pressed={recording || showStop}
             aria-disabled={showSend ? busy : false}
           >
-            <Icon name={showSend ? 'arrow-up' : 'mic'} size={16} />
+            <Icon name={showStop ? 'x' : showSend ? 'arrow-up' : 'mic'} size={16} />
+            {recording ? <span className="composer-send__label">{recordingLabel}</span> : null}
           </button>
         </div>
       </div>
