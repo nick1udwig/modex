@@ -81,7 +81,7 @@ const sidecarConfig = (): SidecarConfig => ({
   url:
     readRuntimeOverride('sidecarUrl', 'modex.sidecar.url') ??
     import.meta.env.VITE_MODEX_SIDECAR_URL?.trim() ??
-    buildDefaultWebSocketUrl(4230),
+    buildDefaultWebSocketUrl({ path: '/sidecar' }),
 });
 
 const normalizeSidecarUrl = (rawUrl: string) => {

@@ -1,5 +1,10 @@
 const LOOPBACK_HOST = '127.0.0.1';
 
+interface WebSocketUrlTarget {
+  path?: string;
+  port?: number;
+}
+
 const browserLocation = () => {
   if (typeof window === 'undefined') {
     return undefined;
@@ -26,16 +31,21 @@ export const readRuntimeOverride = (queryKey: string, storageKey: string) => {
   }
 };
 
-export const buildDefaultWebSocketUrl = (port: number, fallbackHost = LOOPBACK_HOST) => {
+export const buildDefaultWebSocketUrl = (
+  target: number | WebSocketUrlTarget,
+  fallbackHost = LOOPBACK_HOST,
+) => {
+  const options = typeof target === 'number' ? { port: target } : target;
   const location = browserLocation();
   const hostname = location?.hostname?.trim() || fallbackHost;
   const protocol = location?.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = new URL('ws://127.0.0.1');
+  const path = options.path?.trim() || '';
 
   url.protocol = protocol;
   url.hostname = hostname;
-  url.port = String(port);
-  url.pathname = '';
+  url.port = options.port === undefined ? '' : String(options.port);
+  url.pathname = path ? (path.startsWith('/') ? path : `/${path}`) : '';
   url.search = '';
   url.hash = '';
 

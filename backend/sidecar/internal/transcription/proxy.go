@@ -148,15 +148,14 @@ func defaultSessionUpdate(cfg config.TranscriptionConfig) ([]byte, error) {
 		return nil, nil
 	}
 
-	body := map[string]any{
-		"type":               "transcription_session.update",
+	session := map[string]any{
 		"input_audio_format": cfg.InputAudioFormat,
 		"input_audio_transcription": map[string]any{
 			"model": cfg.Model,
 		},
 	}
 
-	transcription := body["input_audio_transcription"].(map[string]any)
+	transcription := session["input_audio_transcription"].(map[string]any)
 	if cfg.Prompt != "" {
 		transcription["prompt"] = cfg.Prompt
 	}
@@ -164,12 +163,12 @@ func defaultSessionUpdate(cfg config.TranscriptionConfig) ([]byte, error) {
 		transcription["language"] = cfg.Language
 	}
 	if cfg.NoiseReductionType != "" {
-		body["input_audio_noise_reduction"] = map[string]any{
+		session["input_audio_noise_reduction"] = map[string]any{
 			"type": cfg.NoiseReductionType,
 		}
 	}
 	if cfg.UseServerVAD {
-		body["turn_detection"] = map[string]any{
+		session["turn_detection"] = map[string]any{
 			"type":                "server_vad",
 			"threshold":           cfg.VADThreshold,
 			"prefix_padding_ms":   cfg.PrefixPaddingMS,
@@ -177,7 +176,12 @@ func defaultSessionUpdate(cfg config.TranscriptionConfig) ([]byte, error) {
 		}
 	}
 	if len(cfg.Include) > 0 {
-		body["include"] = cfg.Include
+		session["include"] = cfg.Include
+	}
+
+	body := map[string]any{
+		"type":    "transcription_session.update",
+		"session": session,
 	}
 
 	payload, err := json.Marshal(body)

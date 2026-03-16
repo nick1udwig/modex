@@ -43,9 +43,12 @@ test('buildDefaultWebSocketUrl follows the current browser host', async () => {
   });
 });
 
-test('buildDefaultWebSocketUrl upgrades to wss on https pages', async () => {
+test('buildDefaultWebSocketUrl supports same-origin path defaults', async () => {
   await withWindow({ hostname: 'levi.taila510b.ts.net', protocol: 'https:' }, () => {
-    assert.equal(buildDefaultWebSocketUrl(4230), 'wss://levi.taila510b.ts.net:4230');
+    assert.equal(
+      buildDefaultWebSocketUrl({ path: '/sidecar' }),
+      'wss://levi.taila510b.ts.net/sidecar',
+    );
   });
 });
 

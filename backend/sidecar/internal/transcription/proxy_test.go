@@ -2,6 +2,7 @@ package transcription
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -82,8 +83,30 @@ func TestProxySendsDefaultSessionAndForwardsMessages(t *testing.T) {
 	}
 
 	first := <-upstreamReceived
-	if !strings.Contains(first, `"type":"transcription_session.update"`) {
-		t.Fatalf("expected default session update, got %s", first)
+	var defaultSession map[string]any
+	if err := json.Unmarshal([]byte(first), &defaultSession); err != nil {
+		t.Fatalf("unmarshal default session update: %v", err)
+	}
+
+	if defaultSession["type"] != "transcription_session.update" {
+		t.Fatalf("expected transcription_session.update, got %s", first)
+	}
+
+	session, ok := defaultSession["session"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested session object, got %s", first)
+	}
+
+	if session["input_audio_format"] != "pcm16" {
+		t.Fatalf("unexpected input audio format %v", session["input_audio_format"])
+	}
+
+	transcription, ok := session["input_audio_transcription"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected input audio transcription config, got %s", first)
+	}
+	if transcription["model"] != "gpt-4o-transcribe" {
+		t.Fatalf("unexpected transcription config %v", transcription)
 	}
 
 	second := <-upstreamReceived

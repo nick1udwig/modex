@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
+import {
+  describeRealtimeTranscriptionStartError,
+  getRecordingAudioContextConstructor,
+  getRealtimeTranscriptionSupport,
+} from '../services/realtimeTranscriptionSupport';
 import { buildSidecarWebSocketUrl } from '../services/sidecarClient';
 import { encodeAudioChunk, mergeRecognizedText } from '../services/transcriptionAudio';
 
 type AudioContextLike = AudioContext;
-type AudioContextCtor = typeof AudioContext;
 
 export type TranscriptionTarget = 'draft' | 'search';
 
@@ -30,10 +34,6 @@ interface RawTranscriptionEvent {
   type?: string;
 }
 
-const browserWindow = typeof window === 'undefined' ? null : (window as Window & { webkitAudioContext?: AudioContextCtor });
-
-const audioContextConstructor: AudioContextCtor | undefined =
-  typeof AudioContext !== 'undefined' ? AudioContext : browserWindow?.webkitAudioContext;
 const PREFERRED_AUDIO_CONTEXT_SAMPLE_RATE = 24_000;
 
 const composeTranscript = (order: string[], items: Map<string, string>) => {
@@ -69,6 +69,7 @@ const insertCommittedItem = (order: string[], itemId: string, previousItemId?: s
 };
 
 const createRecordingAudioContext = () => {
+  const audioContextConstructor = getRecordingAudioContextConstructor();
   if (!audioContextConstructor) {
     throw new Error('Voice transcription is not available in this browser.');
   }
@@ -128,8 +129,9 @@ export const useRealtimeTranscription = () => {
   };
 
   const start = async ({ baseText, chatId, target }: StartTranscriptionOptions) => {
-    if (!navigator.mediaDevices?.getUserMedia || !audioContextConstructor) {
-      setError('Voice transcription is not available in this browser.');
+    const support = getRealtimeTranscriptionSupport();
+    if (!support.canRecord) {
+      setError(support.reason);
       return false;
     }
 
@@ -266,14 +268,16 @@ export const useRealtimeTranscription = () => {
         wsRef,
       });
       setSession(null);
-      setError(nextError instanceof Error ? nextError.message : 'Voice transcription failed to start.');
+      setError(describeRealtimeTranscriptionStartError(nextError));
       return false;
     }
   };
 
+  const support = getRealtimeTranscriptionSupport();
+
   return {
     active: Boolean(session),
-    canRecord: typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia !== undefined && audioContextConstructor),
+    canRecord: support.canRecord,
     composedText: session ? mergeRecognizedText(session.baseText, session.transcript) : '',
     error,
     session,
