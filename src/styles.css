@@ -237,6 +237,9 @@ textarea:disabled {
   font-family: var(--font-display);
   font-size: 10px;
   font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .chat-screen {
@@ -632,8 +635,16 @@ textarea:disabled {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: var(--success);
   flex: 0 0 auto;
+}
+
+.tab-card__dot--idle {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.tab-card__dot--unread {
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
 }
 
 .tab-card__line {
@@ -651,11 +662,15 @@ textarea:disabled {
 .tab-card__state {
   margin-top: auto;
   font-size: 10px;
-  color: var(--success);
+  color: var(--muted);
 }
 
 .tab-card__state--running {
   color: var(--primary);
+}
+
+.tab-card__state--unread {
+  color: var(--success-soft);
 }
 
 .drawer-screen {

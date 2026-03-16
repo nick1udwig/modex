@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type {
   ApprovalDecision,
+  ChatTab,
   ChatRuntimeSettings,
   InteractionRequest,
   ChatSummary,
@@ -14,6 +15,7 @@ import {
   ensureTab,
   replaceOrAppendMessage,
   setTabStatusIfOpen,
+  setTabUnreadIfOpen,
   setThreadTokenUsage,
   summarizeThread,
   updateChatSummary,
@@ -29,10 +31,7 @@ interface ModexState {
   error: string | null;
   interactionByChatId: Record<string, InteractionRequest | undefined>;
   loading: boolean;
-  openTabs: Array<{
-    chatId: string;
-    status: 'idle' | 'running';
-  }>;
+  openTabs: ChatTab[];
 }
 
 const DEFAULT_ACCESS_MODE: ChatRuntimeSettings['accessMode'] = 'workspace-write';
@@ -45,6 +44,7 @@ const bootstrapWorkspace = () => {
   const cachedStatusByChatId = new Map(workspace.cachedChats.map((chat) => [chat.id, chat.status] satisfies [string, ChatSummary['status']]));
   const openTabs = workspace.openChatIds.map((chatId) => ({
     chatId,
+    hasUnreadCompletion: false,
     status: workspace.cachedThreadsByChatId[chatId]?.status ?? cachedStatusByChatId.get(chatId) ?? 'idle',
   }));
 
@@ -95,20 +95,37 @@ const clearInteractionForChat = (
   return next;
 };
 
-const applyThread = (current: ModexState, thread: ChatThread): ModexState => ({
-  ...current,
-  chatMap: {
-    ...current.chatMap,
-    [thread.id]: thread,
-  },
-  chatSettingsByChatId: {
-    ...current.chatSettingsByChatId,
-    [thread.id]: inferSettings(thread, current.chatSettingsByChatId[thread.id]),
-  },
-  chats: updateChatSummary(current.chats, thread),
-  interactionByChatId: thread.status === 'idle' ? clearInteractionForChat(current.interactionByChatId, thread.id) : current.interactionByChatId,
-  openTabs: setTabStatusIfOpen(current.openTabs, thread.id, thread.status),
-});
+const shouldMarkUnreadCompletion = (
+  current: ModexState,
+  chatId: string,
+  nextStatus: ChatThread['status'],
+) =>
+  nextStatus === 'idle' &&
+  current.activeChatId !== chatId &&
+  current.openTabs.some((tab) => tab.chatId === chatId && tab.status === 'running');
+
+const applyThread = (current: ModexState, thread: ChatThread): ModexState => {
+  const shouldMarkUnread = shouldMarkUnreadCompletion(current, thread.id, thread.status);
+  const openTabs = shouldMarkUnread
+    ? setTabUnreadIfOpen(setTabStatusIfOpen(current.openTabs, thread.id, thread.status), thread.id, true)
+    : setTabStatusIfOpen(current.openTabs, thread.id, thread.status);
+
+  return {
+    ...current,
+    chatMap: {
+      ...current.chatMap,
+      [thread.id]: thread,
+    },
+    chatSettingsByChatId: {
+      ...current.chatSettingsByChatId,
+      [thread.id]: inferSettings(thread, current.chatSettingsByChatId[thread.id]),
+    },
+    chats: updateChatSummary(current.chats, thread),
+    interactionByChatId:
+      thread.status === 'idle' ? clearInteractionForChat(current.interactionByChatId, thread.id) : current.interactionByChatId,
+    openTabs,
+  };
+};
 
 const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexState => {
   switch (event.type) {
@@ -164,7 +181,9 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
           event.status === 'idle'
             ? clearInteractionForChat(current.interactionByChatId, event.chatId)
             : current.interactionByChatId,
-        openTabs: setTabStatusIfOpen(current.openTabs, event.chatId, event.status),
+        openTabs: shouldMarkUnreadCompletion(current, event.chatId, event.status)
+          ? setTabUnreadIfOpen(setTabStatusIfOpen(current.openTabs, event.chatId, event.status), event.chatId, true)
+          : setTabStatusIfOpen(current.openTabs, event.chatId, event.status),
       };
     }
 
@@ -303,7 +322,7 @@ export const useModexApp = (client: RemoteAppClient) => {
             error: null,
             interactionByChatId: {},
             loading: false,
-            openTabs: [{ chatId: created.id, status: created.status }],
+            openTabs: [{ chatId: created.id, hasUnreadCompletion: false, status: created.status }],
           });
           return;
         }
@@ -312,6 +331,7 @@ export const useModexApp = (client: RemoteAppClient) => {
         const openTabs = workspace
           ? workspace.openChatIds.map((chatId) => ({
               chatId,
+              hasUnreadCompletion: false,
               status:
                 chats.find((chat) => chat.id === chatId)?.status ??
                 workspace.cachedThreadsByChatId[chatId]?.status ??
@@ -432,10 +452,10 @@ export const useModexApp = (client: RemoteAppClient) => {
     setState((current) => ({
       ...current,
       activeChatId: chatId,
-      openTabs: ensureTab(
-        current.openTabs,
+      openTabs: setTabUnreadIfOpen(
+        ensureTab(current.openTabs, chatId, current.chats.find((chat) => chat.id === chatId)?.status ?? 'idle'),
         chatId,
-        current.chats.find((chat) => chat.id === chatId)?.status ?? 'idle',
+        false,
       ),
     }));
 
@@ -494,7 +514,9 @@ export const useModexApp = (client: RemoteAppClient) => {
           [thread.id]: '',
         },
         error: null,
-        openTabs: ensureTab(current.openTabs, thread.id, thread.status),
+        openTabs: ensureTab(current.openTabs, thread.id, thread.status, {
+          hasUnreadCompletion: false,
+        }),
       }));
       return thread;
     } catch (error) {
@@ -536,7 +558,9 @@ export const useModexApp = (client: RemoteAppClient) => {
     setState((current) => ({
       ...current,
       error: null,
-      openTabs: ensureTab(current.openTabs, chatId, 'running'),
+      openTabs: ensureTab(current.openTabs, chatId, 'running', {
+        hasUnreadCompletion: false,
+      }),
       draftsByChatId: {
         ...current.draftsByChatId,
         [chatId]: '',

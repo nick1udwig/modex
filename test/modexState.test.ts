@@ -1,28 +1,36 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ChatSummary, ChatThread } from '../src/app/types.ts';
-import { defaultOpenTabs, ensureTab, setTabStatusIfOpen, updateChatSummary } from '../src/state/modexState.ts';
+import { defaultOpenTabs, ensureTab, setTabStatusIfOpen, setTabUnreadIfOpen, updateChatSummary } from '../src/state/modexState.ts';
 
 test('ensureTab appends new tabs and updates existing status', () => {
-  const initial = [{ chatId: 'chat-a', status: 'idle' as const }];
+  const initial = [{ chatId: 'chat-a', hasUnreadCompletion: false, status: 'idle' as const }];
 
   assert.deepEqual(ensureTab(initial, 'chat-b'), [
-    { chatId: 'chat-a', status: 'idle' },
-    { chatId: 'chat-b', status: 'idle' },
+    { chatId: 'chat-a', hasUnreadCompletion: false, status: 'idle' },
+    { chatId: 'chat-b', hasUnreadCompletion: false, status: 'idle' },
   ]);
 
-  assert.deepEqual(ensureTab(initial, 'chat-a', 'running'), [{ chatId: 'chat-a', status: 'running' }]);
+  assert.deepEqual(ensureTab(initial, 'chat-a', 'running'), [{ chatId: 'chat-a', hasUnreadCompletion: false, status: 'running' }]);
 });
 
 test('setTabStatusIfOpen updates only matching tabs', () => {
   const initial = [
-    { chatId: 'chat-a', status: 'idle' as const },
-    { chatId: 'chat-b', status: 'idle' as const },
+    { chatId: 'chat-a', hasUnreadCompletion: false, status: 'idle' as const },
+    { chatId: 'chat-b', hasUnreadCompletion: false, status: 'idle' as const },
   ];
 
   assert.deepEqual(setTabStatusIfOpen(initial, 'chat-b', 'running'), [
-    { chatId: 'chat-a', status: 'idle' },
-    { chatId: 'chat-b', status: 'running' },
+    { chatId: 'chat-a', hasUnreadCompletion: false, status: 'idle' },
+    { chatId: 'chat-b', hasUnreadCompletion: false, status: 'running' },
+  ]);
+});
+
+test('setTabUnreadIfOpen marks completions without changing the run state', () => {
+  const initial = [{ chatId: 'chat-a', hasUnreadCompletion: false, status: 'idle' as const }];
+
+  assert.deepEqual(setTabUnreadIfOpen(initial, 'chat-a', true), [
+    { chatId: 'chat-a', hasUnreadCompletion: true, status: 'idle' },
   ]);
 });
 
@@ -82,7 +90,7 @@ test('defaultOpenTabs opens the first two chats for a fresh workspace', () => {
   ];
 
   assert.deepEqual(defaultOpenTabs(chats), [
-    { chatId: 'chat-a', status: 'idle' },
-    { chatId: 'chat-b', status: 'running' },
+    { chatId: 'chat-a', hasUnreadCompletion: false, status: 'idle' },
+    { chatId: 'chat-b', hasUnreadCompletion: false, status: 'running' },
   ]);
 });

@@ -68,6 +68,41 @@ const cloneSettings = (settings: ChatRuntimeSettings): ChatRuntimeSettings => ({
   roots: [...settings.roots],
 });
 
+const playCompletionDing = () => {
+  const AudioContextConstructor = window.AudioContext;
+  if (!AudioContextConstructor) {
+    return;
+  }
+
+  const context = new AudioContextConstructor();
+  const now = context.currentTime;
+  const gain = context.createGain();
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.16, now + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.72);
+  gain.connect(context.destination);
+
+  const lead = context.createOscillator();
+  lead.type = 'sine';
+  lead.frequency.setValueAtTime(1_046, now);
+  lead.frequency.exponentialRampToValueAtTime(1_568, now + 0.22);
+  lead.connect(gain);
+  lead.start(now);
+  lead.stop(now + 0.28);
+
+  const tail = context.createOscillator();
+  tail.type = 'triangle';
+  tail.frequency.setValueAtTime(784, now + 0.05);
+  tail.frequency.exponentialRampToValueAtTime(1_174, now + 0.36);
+  tail.connect(gain);
+  tail.start(now + 0.05);
+  tail.stop(now + 0.42);
+
+  window.setTimeout(() => {
+    void context.close().catch(() => undefined);
+  }, 900);
+};
+
 export const App = () => {
   const client = useMemo(() => createAppServerClient(), []);
   const filesystemClient = useMemo(() => createSidecarFilesystemClient(), []);
@@ -91,6 +126,8 @@ export const App = () => {
   const tabNodeMapRef = useRef(new Map<string, HTMLButtonElement>());
   const timeoutIdsRef = useRef<number[]>([]);
   const frameIdsRef = useRef<number[]>([]);
+  const previousTabSnapshotRef = useRef<Record<string, { hasUnreadCompletion: boolean; status: 'idle' | 'running' }>>({});
+  const mountedRef = useRef(false);
   const activeTab = modex.openTabs.find((tab) => tab.chatId === modex.activeChatId);
   const isBusy = activeTab?.status === 'running';
   const transitionChatId = paneTransition?.chatId ?? null;
@@ -103,6 +140,30 @@ export const App = () => {
   useEffect(() => {
     drawerProgressRef.current = drawerProgress;
   }, [drawerProgress]);
+
+  useEffect(() => {
+    const previousSnapshot = previousTabSnapshotRef.current;
+    const nextSnapshot = Object.fromEntries(
+      modex.openTabs.map((tab) => [
+        tab.chatId,
+        {
+          hasUnreadCompletion: tab.hasUnreadCompletion,
+          status: tab.status,
+        },
+      ]),
+    );
+
+    if (mountedRef.current) {
+      const completedTab = modex.openTabs.find((tab) => previousSnapshot[tab.chatId]?.status === 'running' && tab.status === 'idle');
+      if (completedTab) {
+        playCompletionDing();
+      }
+    } else {
+      mountedRef.current = true;
+    }
+
+    previousTabSnapshotRef.current = nextSnapshot;
+  }, [modex.openTabs]);
 
   useEffect(
     () => () => {
@@ -793,7 +854,12 @@ export const App = () => {
                       <span className="chat-header__dot" aria-hidden="true" />
                       <span className="chat-header__title">Modex Auto</span>
 
-                      {showRunningBadge ? <span className="chat-header__badge">RUNNING</span> : null}
+                      {showRunningBadge ? (
+                        <span className="chat-header__badge">
+                          <Icon name="loader" size={12} spin />
+                          <span>In progress</span>
+                        </span>
+                      ) : null}
                     </div>
 
                     <button className="header-icon" type="button" onClick={openTabs} aria-label="Open tabs">

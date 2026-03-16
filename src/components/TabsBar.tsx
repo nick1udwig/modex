@@ -157,8 +157,10 @@ const TabCard = ({ active, chat, masked, onActivate, onClose, registerNode, sear
         </span>
         {tab.status === 'running' ? (
           <Icon name="loader" size={14} spin className="tab-card__icon tab-card__icon--running" />
+        ) : tab.hasUnreadCompletion ? (
+          <span className="tab-card__dot tab-card__dot--unread" aria-hidden="true" />
         ) : (
-          <span className="tab-card__dot" aria-hidden="true" />
+          <span className="tab-card__dot tab-card__dot--idle" aria-hidden="true" />
         )}
       </div>
 
@@ -168,8 +170,12 @@ const TabCard = ({ active, chat, masked, onActivate, onClose, registerNode, sear
       <p className="tab-card__line">
         <HighlightedText query={searchQuery} text={snippet.secondary} />
       </p>
-      <span className={`tab-card__state ${tab.status === 'running' ? 'tab-card__state--running' : ''}`}>
-        {tab.status === 'running' ? 'Running' : 'Ready'}
+      <span
+        className={`tab-card__state ${tab.status === 'running' ? 'tab-card__state--running' : ''} ${
+          tab.hasUnreadCompletion ? 'tab-card__state--unread' : ''
+        }`}
+      >
+        {tab.status === 'running' ? 'In progress' : tab.hasUnreadCompletion ? 'New reply' : 'Ready'}
       </span>
     </button>
   );

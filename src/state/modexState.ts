@@ -1,15 +1,40 @@
 import type { ChatSummary, ChatTab, ChatThread, Message } from '../app/types';
 
-export const ensureTab = (tabs: ChatTab[], chatId: string, status: ChatTab['status'] = 'idle') => {
+export const ensureTab = (
+  tabs: ChatTab[],
+  chatId: string,
+  status: ChatTab['status'] = 'idle',
+  options?: {
+    hasUnreadCompletion?: boolean;
+  },
+) => {
   if (tabs.some((tab) => tab.chatId === chatId)) {
-    return tabs.map((tab) => (tab.chatId === chatId ? { ...tab, status } : tab));
+    return tabs.map((tab) =>
+      tab.chatId === chatId
+        ? {
+            ...tab,
+            hasUnreadCompletion: options?.hasUnreadCompletion ?? tab.hasUnreadCompletion,
+            status,
+          }
+        : tab,
+    );
   }
 
-  return [...tabs, { chatId, status }];
+  return [
+    ...tabs,
+    {
+      chatId,
+      hasUnreadCompletion: options?.hasUnreadCompletion ?? false,
+      status,
+    },
+  ];
 };
 
 export const setTabStatusIfOpen = (tabs: ChatTab[], chatId: string, status: ChatTab['status']) =>
   tabs.map((tab) => (tab.chatId === chatId ? { ...tab, status } : tab));
+
+export const setTabUnreadIfOpen = (tabs: ChatTab[], chatId: string, hasUnreadCompletion: boolean) =>
+  tabs.map((tab) => (tab.chatId === chatId ? { ...tab, hasUnreadCompletion } : tab));
 
 export const updateChatSummary = (chats: ChatSummary[], thread: ChatThread) => {
   const summary = summarizeThread(thread);
@@ -92,5 +117,6 @@ export const setThreadTokenUsage = (thread: ChatThread, label: string | null): C
 export const defaultOpenTabs = (chats: ChatSummary[]) =>
   chats.slice(0, Math.min(chats.length, 2)).map((chat) => ({
     chatId: chat.id,
+    hasUnreadCompletion: false,
     status: chat.status,
   }));

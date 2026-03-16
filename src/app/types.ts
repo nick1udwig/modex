@@ -41,6 +41,7 @@ export interface ChatThread extends ChatSummary {
 
 export interface ChatTab {
   chatId: string;
+  hasUnreadCompletion: boolean;
   status: ChatStatus;
 }
 
