@@ -86,7 +86,6 @@ export const Sidebar = ({
           <div className="drawer-list">
             {chats.map((chat) => {
               const active = chat.id === activeChatId;
-              const searchActive = searchQuery.trim().length > 0;
 
               return (
                 <button
@@ -103,11 +102,12 @@ export const Sidebar = ({
                   <span className="drawer-list__title">
                     <HighlightedText query={searchQuery} text={chat.title} />
                   </span>
-                  {searchActive ? (
-                    <span className="drawer-list__preview">
-                      <HighlightedText query={searchQuery} text={chat.preview} />
-                    </span>
-                  ) : null}
+                  <span className="drawer-list__path">
+                    <HighlightedText query={searchQuery} text={chat.cwd || 'No working directory'} />
+                  </span>
+                  <span className="drawer-list__preview">
+                    <HighlightedText query={searchQuery} text={chat.preview} />
+                  </span>
                   <span className="drawer-list__meta">{active ? relativeDay(chat.updatedAt) : chat.status === 'running' ? 'Running' : 'Ready'}</span>
                 </button>
               );

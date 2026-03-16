@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AccessMode, ApprovalDecision, InteractionRequest } from '../app/types';
+import type { AccessMode, ApprovalDecision, InteractionRequest, PendingAttachment } from '../app/types';
 import { Icon } from './Icon';
 import { InteractionPrompt } from './InteractionPrompt';
 
@@ -7,6 +7,7 @@ type FooterAction = 'tabs' | 'new-tab';
 
 interface ComposerProps {
   accessMode: AccessMode | null;
+  attachments: PendingAttachment[];
   busy: boolean;
   draft: string;
   error: string | null;
@@ -14,6 +15,7 @@ interface ComposerProps {
   inputDisabled?: boolean;
   interactionRequest: InteractionRequest | null;
   maskFooterAction?: boolean;
+  onAttachFiles: (files: FileList) => void;
   onApprovalDecision: (decision: ApprovalDecision) => void;
   onCloseSearch: () => void;
   onCreateChat: () => void;
@@ -25,6 +27,7 @@ interface ComposerProps {
   onSearchPrevious: () => void;
   onSearchQueryChange: (value: string) => void;
   onSend: () => void;
+  onRemoveAttachment: (attachmentId: string) => void;
   onStopRun: () => void;
   onSubmitUserInput: (answers: Record<string, string[]>) => void;
   onToggleVoiceInput: () => void;
@@ -40,6 +43,7 @@ interface ComposerProps {
 
 export const Composer = ({
   accessMode,
+  attachments,
   busy,
   draft,
   error,
@@ -47,6 +51,7 @@ export const Composer = ({
   inputDisabled = false,
   interactionRequest,
   maskFooterAction = false,
+  onAttachFiles,
   onApprovalDecision,
   onCloseSearch,
   onCreateChat,
@@ -58,6 +63,7 @@ export const Composer = ({
   onSearchPrevious,
   onSearchQueryChange,
   onSend,
+  onRemoveAttachment,
   onStopRun,
   onSubmitUserInput,
   onToggleVoiceInput,
@@ -71,13 +77,13 @@ export const Composer = ({
   searchQuery,
 }: ComposerProps) => {
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const hasDraft = draft.trim().length > 0;
   const showStop = busy && !recording;
-  const showSend = !showStop && !searchActive && hasDraft && !recording;
+  const showSend = !showStop && !searchActive && (hasDraft || attachments.length > 0) && !recording;
   const recordingLabel = recordingStatus === 'connecting' ? 'Starting voice' : 'Transcribing';
-  const stopLabel = 'Stop run';
 
   useEffect(() => {
     if (!inputRef.current) {
@@ -86,6 +92,7 @@ export const Composer = ({
 
     inputRef.current.style.height = '24px';
     inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 96)}px`;
+    inputRef.current.scrollTop = inputRef.current.scrollHeight;
   }, [draft, searchActive, searchQuery]);
 
   useEffect(() => {
@@ -131,12 +138,37 @@ export const Composer = ({
 
       {error ? <p className="composer-error">{error}</p> : null}
 
+      {attachments.length > 0 ? (
+        <div className="composer-attachments" aria-label="Pending attachments">
+          {attachments.map((attachment) => (
+            <div key={attachment.id} className="composer-attachment">
+              <span className="composer-attachment__name">{attachment.name}</span>
+              <button
+                className="composer-attachment__remove"
+                type="button"
+                onClick={() => onRemoveAttachment(attachment.id)}
+                aria-label={`Remove ${attachment.name}`}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       <div className="composer-row">
         <button
           className="footer-icon footer-icon--muted"
           type="button"
-          onClick={searchActive ? onCloseSearch : onCreateChat}
-          aria-label={searchActive ? 'Exit search' : 'Create a new chat'}
+          onClick={() => {
+            if (searchActive) {
+              onCloseSearch();
+              return;
+            }
+
+            fileInputRef.current?.click();
+          }}
+          aria-label={searchActive ? 'Exit search' : 'Attach a file or photo'}
         >
           <Icon name={searchActive ? 'arrow-left' : 'plus'} size={16} />
         </button>
@@ -202,12 +234,24 @@ export const Composer = ({
             aria-pressed={recording || showStop}
             aria-disabled={showSend ? busy : false}
           >
-            <Icon name={showStop ? 'x' : showSend ? 'arrow-up' : 'mic'} size={16} />
-            {showStop ? <span className="composer-send__label">{stopLabel}</span> : null}
+            <Icon name={showStop ? 'stop' : showSend ? 'arrow-up' : 'mic'} size={16} />
             {recording ? <span className="composer-send__label">{recordingLabel}</span> : null}
           </button>
         </div>
       </div>
+
+      <input
+        ref={fileInputRef}
+        className="composer-file-input"
+        type="file"
+        multiple
+        onChange={(event) => {
+          if (event.target.files && event.target.files.length > 0) {
+            onAttachFiles(event.target.files);
+          }
+          event.target.value = '';
+        }}
+      />
 
       <div className={`footer-nav ${searchActive ? 'footer-nav--search' : ''}`}>
         {searchActive ? (

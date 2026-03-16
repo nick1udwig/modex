@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { searchSummaries, searchThreadMessages } from './search';
-import type { ChatRuntimeSettings } from './types';
+import type { ChatRuntimeSettings, ModelOption, PendingAttachment, ReasoningEffort } from './types';
 import { useRealtimeTranscription } from './useRealtimeTranscription';
 import { Composer } from '../components/Composer';
 import { ConversationView } from '../components/ConversationView';
@@ -62,11 +62,71 @@ const DRAWER_EDGE_WIDTH = 28;
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const CLOSED_SETTINGS_SHEET: SettingsSheetState = { open: false };
+const DEFAULT_REASONING_EFFORTS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const FALLBACK_MODEL_OPTIONS: ModelOption[] = [
+  {
+    defaultReasoningEffort: 'xhigh',
+    displayName: 'GPT-5.4',
+    id: 'gpt-5.4',
+    isDefault: true,
+    supportedReasoningEfforts: DEFAULT_REASONING_EFFORTS,
+  },
+];
 
 const cloneSettings = (settings: ChatRuntimeSettings): ChatRuntimeSettings => ({
   accessMode: settings.accessMode,
+  model: settings.model,
+  reasoningEffort: settings.reasoningEffort,
   roots: [...settings.roots],
 });
+
+const attachmentId = () =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `attachment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const isTextAttachmentFile = (file: File) =>
+  file.type.startsWith('text/') ||
+  /\.(c|cc|cpp|cs|css|go|h|hpp|html|ini|java|js|json|kt|log|lua|m|md|php|pl|py|rb|rs|sh|sql|svg|swift|toml|ts|tsx|txt|xml|ya?ml)$/i.test(
+    file.name,
+  );
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error(`Unable to read ${file.name}`));
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.readAsDataURL(file);
+  });
+
+const readFileAsText = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error(`Unable to read ${file.name}`));
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.readAsText(file);
+  });
+
+const findScrollableParent = (target: EventTarget | null, boundary: HTMLElement | null) => {
+  if (!(target instanceof Element)) {
+    return null;
+  }
+
+  let node: Element | null = target;
+  while (node && node !== boundary) {
+    if (node instanceof HTMLElement) {
+      const style = window.getComputedStyle(node);
+      const canScrollY = /(auto|scroll|overlay)/.test(style.overflowY);
+      if (canScrollY && node.scrollHeight > node.clientHeight + 1) {
+        return node;
+      }
+    }
+
+    node = node.parentElement;
+  }
+
+  return null;
+};
 
 const playCompletionDing = () => {
   const AudioContextConstructor = window.AudioContext;
@@ -116,6 +176,8 @@ export const App = () => {
   const [searchActive, setSearchActive] = useState(false);
   const [searchIndex, setSearchIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>(FALLBACK_MODEL_OPTIONS);
   const [settingsSheet, setSettingsSheet] = useState<SettingsSheetState>(CLOSED_SETTINGS_SHEET);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const footerActionNodeRef = useRef<HTMLButtonElement | null>(null);
@@ -136,10 +198,36 @@ export const App = () => {
       ? transcription.composedText
       : modex.draft;
   const liveSearchQuery = transcription.session?.target === 'search' ? transcription.composedText : searchQuery;
+  const defaultModel = modelOptions.find((model) => model.isDefault) ?? modelOptions[0] ?? FALLBACK_MODEL_OPTIONS[0];
+  const selectedModelId = modex.activeChatSettings?.model ?? defaultModel.id;
+  const selectedModel = modelOptions.find((model) => model.id === selectedModelId) ?? defaultModel;
+  const selectedReasoningEffort =
+    modex.activeChatSettings?.reasoningEffort ?? selectedModel.defaultReasoningEffort ?? defaultModel.defaultReasoningEffort;
 
   useEffect(() => {
     drawerProgressRef.current = drawerProgress;
   }, [drawerProgress]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void client
+      .listModels()
+      .then((models) => {
+        if (!cancelled && models.length > 0) {
+          setModelOptions(models);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
+
+  useEffect(() => {
+    setAttachmentError(null);
+  }, [modex.activeChatId]);
 
   useEffect(() => {
     const previousSnapshot = previousTabSnapshotRef.current;
@@ -177,6 +265,60 @@ export const App = () => {
   );
 
   useEffect(() => () => filesystemClient.close(), [filesystemClient]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return;
+    }
+
+    let startX = 0;
+    let startY = 0;
+
+    const handleTouchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 1) {
+        return;
+      }
+
+      startX = event.touches[0].clientX;
+      startY = event.touches[0].clientY;
+    };
+
+    const handleTouchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 1) {
+        return;
+      }
+
+      const dx = event.touches[0].clientX - startX;
+      const dy = event.touches[0].clientY - startY;
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        return;
+      }
+
+      const scrollableParent = findScrollableParent(event.target, stage);
+      if (!scrollableParent) {
+        event.preventDefault();
+        return;
+      }
+
+      const atTop = scrollableParent.scrollTop <= 0;
+      const atBottom =
+        scrollableParent.scrollTop + scrollableParent.clientHeight >= scrollableParent.scrollHeight - 1;
+
+      if ((dy > 0 && atTop) || (dy < 0 && atBottom)) {
+        event.preventDefault();
+      }
+    };
+
+    stage.addEventListener('touchstart', handleTouchStart, { passive: true });
+    stage.addEventListener('touchmove', handleTouchMove, { passive: false });
+
+    return () => {
+      stage.removeEventListener('touchstart', handleTouchStart);
+      stage.removeEventListener('touchmove', handleTouchMove);
+    };
+  }, []);
 
   const scheduleTimeout = (callback: () => void, delay: number) => {
     const timeoutId = window.setTimeout(() => {
@@ -355,7 +497,7 @@ export const App = () => {
       return;
     }
 
-    if (surface !== 'chat' || drawerPhase !== 'closed' || paneTransition || event.clientX > DRAWER_EDGE_WIDTH) {
+    if ((surface !== 'chat' && surface !== 'tabs') || drawerPhase !== 'closed' || paneTransition || event.clientX > DRAWER_EDGE_WIDTH) {
       return;
     }
 
@@ -566,12 +708,16 @@ export const App = () => {
     if (modex.activeChat?.cwd) {
       return {
         accessMode: 'workspace-write',
+        model: defaultModel.id,
+        reasoningEffort: selectedReasoningEffort,
         roots: [modex.activeChat.cwd],
       };
     }
 
     return {
       accessMode: 'workspace-write',
+      model: defaultModel.id,
+      reasoningEffort: selectedReasoningEffort,
       roots: [],
     };
   };
@@ -607,8 +753,91 @@ export const App = () => {
 
     modex.setChatSettings(modex.activeChatId, {
       accessMode,
+      model: modex.activeChatSettings?.model ?? defaultModel.id,
+      reasoningEffort: modex.activeChatSettings?.reasoningEffort ?? selectedReasoningEffort,
       roots: modex.activeChatSettings?.roots ?? (modex.activeChat?.cwd ? [modex.activeChat.cwd] : []),
     });
+  };
+
+  const applyModelSelection = (modelId: string) => {
+    if (!modex.activeChatId) {
+      return;
+    }
+
+    const nextModel = modelOptions.find((model) => model.id === modelId) ?? defaultModel;
+    modex.setChatSettings(modex.activeChatId, {
+      accessMode: modex.activeChatSettings?.accessMode ?? 'workspace-write',
+      model: nextModel.id,
+      reasoningEffort: nextModel.defaultReasoningEffort ?? selectedReasoningEffort,
+      roots: modex.activeChatSettings?.roots ?? (modex.activeChat?.cwd ? [modex.activeChat.cwd] : []),
+    });
+  };
+
+  const applyReasoningEffort = (reasoningEffort: ReasoningEffort) => {
+    if (!modex.activeChatId) {
+      return;
+    }
+
+    modex.setChatSettings(modex.activeChatId, {
+      accessMode: modex.activeChatSettings?.accessMode ?? 'workspace-write',
+      model: modex.activeChatSettings?.model ?? defaultModel.id,
+      reasoningEffort,
+      roots: modex.activeChatSettings?.roots ?? (modex.activeChat?.cwd ? [modex.activeChat.cwd] : []),
+    });
+  };
+
+  const handleAttachmentSelection = async (files: FileList | File[] | null) => {
+    if (!modex.activeChatId || !files) {
+      return;
+    }
+
+    const selectedFiles = Array.from(files);
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    setAttachmentError(null);
+    const attachments: PendingAttachment[] = [];
+    const unsupported: string[] = [];
+
+    for (const file of selectedFiles) {
+      try {
+        if (file.type.startsWith('image/')) {
+          attachments.push({
+            id: attachmentId(),
+            kind: 'image',
+            mimeType: file.type || 'image/*',
+            name: file.name,
+            url: await readFileAsDataUrl(file),
+          });
+          continue;
+        }
+
+        if (isTextAttachmentFile(file)) {
+          attachments.push({
+            id: attachmentId(),
+            kind: 'text-file',
+            mimeType: file.type || 'text/plain',
+            name: file.name,
+            text: (await readFileAsText(file)).slice(0, 120_000),
+          });
+          continue;
+        }
+
+        unsupported.push(file.name);
+      } catch (error) {
+        unsupported.push(file.name);
+        setAttachmentError(error instanceof Error ? error.message : `Unable to read ${file.name}`);
+      }
+    }
+
+    if (attachments.length > 0) {
+      modex.addAttachments(modex.activeChatId, attachments);
+    }
+
+    if (unsupported.length > 0) {
+      setAttachmentError(`Only images and text files can be attached right now. Skipped: ${unsupported.join(', ')}`);
+    }
   };
 
   const submitSettingsSheet = async (settings: ChatRuntimeSettings) => {
@@ -809,6 +1038,10 @@ export const App = () => {
                         : 'workspace-pane--tabs-exit'
                       : ''
                   } ${surface === 'tabs' && !paneTransition ? 'workspace-pane--tabs-active' : ''}`}
+                  onPointerDown={handleChatPanePointerDown}
+                  onPointerMove={handleDrawerPointerMove}
+                  onPointerUp={handleDrawerPointerEnd}
+                  onPointerCancel={handleDrawerPointerEnd}
                 >
                   <TabsBar
                     tabs={visibleTabs}
@@ -817,6 +1050,7 @@ export const App = () => {
                     maskedChatId={transitionChatId}
                     onActivate={openChatFromTab}
                     onClose={modex.closeTab}
+                    onOpenChats={openDrawer}
                     registerTabNode={registerTabNode}
                     searchQuery={effectiveTabsSearchQuery}
                     selectedSearchChatId={selectedSearchChatId}
@@ -872,7 +1106,12 @@ export const App = () => {
                     busy={Boolean(isBusy)}
                     chat={modex.activeChat}
                     loading={modex.loading}
+                    modelOptions={modelOptions}
+                    onSelectModel={applyModelSelection}
+                    onSelectReasoningEffort={applyReasoningEffort}
                     searchQuery={effectiveChatSearchQuery}
+                    selectedModelId={selectedModelId}
+                    selectedReasoningEffort={selectedReasoningEffort}
                   />
                 </div>
               ) : null}
@@ -901,13 +1140,15 @@ export const App = () => {
 
           <Composer
             accessMode={modex.activeChatSettings?.accessMode ?? null}
+            attachments={modex.activeAttachments}
             busy={Boolean(isBusy)}
             draft={liveDraft}
-            error={transcription.error ?? modex.error}
+            error={attachmentError ?? transcription.error ?? modex.error}
             footerAction={composerSurface === 'tabs' ? 'new-tab' : 'tabs'}
             inputDisabled={transcription.active}
             interactionRequest={modex.activeInteraction}
             maskFooterAction={paneTransition?.origin === 'footer-action'}
+            onAttachFiles={(files) => void handleAttachmentSelection(files)}
             onApprovalDecision={(decision) => void modex.respondToApproval(decision)}
             onCloseSearch={() => {
               commitTranscription(false);
@@ -923,6 +1164,11 @@ export const App = () => {
               setSearchActive(true);
             }}
             onOpenTabs={openTabs}
+            onRemoveAttachment={(attachmentId) => {
+              if (modex.activeChatId) {
+                modex.removeAttachment(modex.activeChatId, attachmentId);
+              }
+            }}
             onSearchNext={() => stepSearch(1)}
             onSearchPrevious={() => stepSearch(-1)}
             onSearchQueryChange={setSearchQuery}

@@ -12,6 +12,7 @@ export type IconName =
   | 'panel-right-open'
   | 'plus'
   | 'search'
+  | 'stop'
   | 'wifi'
   | 'x';
 
@@ -138,6 +139,12 @@ export const Icon = ({ name, size = 18, spin = false, style, ...props }: IconPro
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={mergedStyle} {...props}>
           <path d="M6 6 18 18" strokeLinecap="round" />
           <path d="M18 6 6 18" strokeLinecap="round" />
+        </svg>
+      );
+    case 'stop':
+      return (
+        <svg viewBox="0 0 24 24" fill="currentColor" style={mergedStyle} {...props}>
+          <rect x="7" y="7" width="10" height="10" rx="2.2" />
         </svg>
       );
     default:

@@ -10,6 +10,7 @@ interface TabsOverviewProps {
   maskedChatId?: string | null;
   onActivate: (chatId: string) => void;
   onClose: (chatId: string) => void;
+  onOpenChats: () => void;
   registerTabNode?: (chatId: string, node: HTMLButtonElement | null) => void;
   searchQuery: string;
   selectedSearchChatId?: string | null;
@@ -187,6 +188,7 @@ export const TabsBar = ({
   maskedChatId = null,
   onActivate,
   onClose,
+  onOpenChats,
   registerTabNode,
   searchQuery,
   selectedSearchChatId = null,
@@ -206,6 +208,13 @@ export const TabsBar = ({
 
   return (
     <section className="tabs-screen">
+      <div className="tabs-top">
+        <button className="header-icon tabs-top__menu" type="button" onClick={onOpenChats} aria-label="Open chats">
+          <Icon name="menu" size={18} />
+        </button>
+        <span className="tabs-top__title">Open Tabs</span>
+      </div>
+
       <div className="tabs-grid" role="list" aria-label="Open chats">
         {tabs.length === 0 ? (
           <div className="tabs-empty">No tabs are open yet. Create a new chat to start a session.</div>
