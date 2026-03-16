@@ -1,6 +1,7 @@
 export type ChatStatus = 'idle' | 'running';
 export type AccessMode = 'read-only' | 'workspace-write';
 export type JsonRpcId = number | string;
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export type MessageRole = 'system' | 'user' | 'assistant';
 export type ActivityKind = 'command' | 'file-change' | 'plan' | 'reasoning';
@@ -25,6 +26,7 @@ export interface ActivityEntry {
 }
 
 export interface ChatSummary {
+  cwd: string;
   id: string;
   title: string;
   updatedAt: string;
@@ -47,6 +49,8 @@ export interface ChatTab {
 
 export interface ChatRuntimeSettings {
   accessMode: AccessMode;
+  model: string | null;
+  reasoningEffort: ReasoningEffort | null;
   roots: string[];
 }
 
@@ -54,10 +58,28 @@ export interface CreateChatPayload {
   settings?: ChatRuntimeSettings;
 }
 
+export interface PendingAttachment {
+  id: string;
+  kind: 'image' | 'text-file';
+  mimeType: string;
+  name: string;
+  text?: string;
+  url?: string;
+}
+
 export interface SendMessagePayload {
+  attachments?: PendingAttachment[];
   chatId: string;
   content: string;
   settings?: ChatRuntimeSettings;
+}
+
+export interface ModelOption {
+  defaultReasoningEffort: ReasoningEffort | null;
+  displayName: string;
+  id: string;
+  isDefault: boolean;
+  supportedReasoningEfforts: ReasoningEffort[];
 }
 
 export type ApprovalDecision = 'accept' | 'acceptForSession' | 'decline';
@@ -149,6 +171,7 @@ export type RemoteThreadEvent =
 
 export interface RemoteAppClient {
   listChats(): Promise<ChatSummary[]>;
+  listModels(): Promise<ModelOption[]>;
   getChat(chatId: string): Promise<ChatThread>;
   createChat(payload?: CreateChatPayload): Promise<ChatThread>;
   sendMessage(payload: SendMessagePayload): Promise<ChatThread>;

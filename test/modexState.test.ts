@@ -37,6 +37,7 @@ test('setTabUnreadIfOpen marks completions without changing the run state', () =
 test('updateChatSummary promotes and sorts updated chats', () => {
   const chats: ChatSummary[] = [
     {
+      cwd: '/workspace/older',
       id: 'older',
       status: 'idle',
       title: 'Older',
@@ -44,6 +45,7 @@ test('updateChatSummary promotes and sorts updated chats', () => {
       preview: 'Older preview',
     },
     {
+      cwd: '/workspace/newer',
       id: 'newer',
       status: 'running',
       title: 'Newer',
@@ -66,6 +68,7 @@ test('updateChatSummary promotes and sorts updated chats', () => {
 
   assert.deepEqual(updateChatSummary(chats, thread), [
     {
+      cwd: '/workspace/older',
       id: 'older',
       status: 'idle',
       title: 'Older refreshed',
@@ -73,6 +76,7 @@ test('updateChatSummary promotes and sorts updated chats', () => {
       preview: 'Latest update',
     },
     {
+      cwd: '/workspace/newer',
       id: 'newer',
       status: 'running',
       title: 'Newer',
@@ -84,9 +88,9 @@ test('updateChatSummary promotes and sorts updated chats', () => {
 
 test('defaultOpenTabs opens the first two chats for a fresh workspace', () => {
   const chats: ChatSummary[] = [
-    { id: 'chat-a', title: 'A', updatedAt: '', preview: '', status: 'idle' },
-    { id: 'chat-b', title: 'B', updatedAt: '', preview: '', status: 'running' },
-    { id: 'chat-c', title: 'C', updatedAt: '', preview: '', status: 'idle' },
+    { cwd: '/workspace/a', id: 'chat-a', title: 'A', updatedAt: '', preview: '', status: 'idle' },
+    { cwd: '/workspace/b', id: 'chat-b', title: 'B', updatedAt: '', preview: '', status: 'running' },
+    { cwd: '/workspace/c', id: 'chat-c', title: 'C', updatedAt: '', preview: '', status: 'idle' },
   ];
 
   assert.deepEqual(defaultOpenTabs(chats), [

@@ -6,6 +6,7 @@ import type {
   InteractionRequest,
   ChatSummary,
   ChatThread,
+  PendingAttachment,
   RemoteAppClient,
   RemoteThreadEvent,
 } from '../app/types';
@@ -24,6 +25,7 @@ import { loadWorkspaceSnapshot, saveWorkspaceSnapshot } from './workspaceStorage
 
 interface ModexState {
   activeChatId: string | null;
+  attachmentsByChatId: Record<string, PendingAttachment[]>;
   chatMap: Record<string, ChatThread>;
   chatSettingsByChatId: Record<string, ChatRuntimeSettings>;
   chats: ChatSummary[];
@@ -50,6 +52,7 @@ const bootstrapWorkspace = () => {
 
   return {
     activeChatId: workspace.activeChatId ?? openTabs[0]?.chatId ?? workspace.cachedChats[0]?.id ?? null,
+    attachmentsByChatId: {},
     chatMap: workspace.cachedThreadsByChatId,
     chatSettingsByChatId: workspace.chatSettingsByChatId,
     chats: workspace.cachedChats,
@@ -69,8 +72,18 @@ const inferSettings = (
   existing?: ChatRuntimeSettings,
 ): ChatRuntimeSettings => ({
   accessMode: existing?.accessMode ?? DEFAULT_ACCESS_MODE,
+  model: existing?.model ?? null,
+  reasoningEffort: existing?.reasoningEffort ?? null,
   roots: existing?.roots.length ? existing.roots : thread.cwd ? [thread.cwd] : [],
 });
+
+const optimisticPreviewFromInputs = (content: string, attachments: PendingAttachment[]) => {
+  const normalizedContent = content.replace(/\s+/g, ' ').trim();
+  const attachmentLines = attachments.map((attachment) =>
+    attachment.kind === 'image' ? `[Image] ${attachment.name}` : `[File] ${attachment.name}`,
+  );
+  return [normalizedContent, ...attachmentLines].filter((entry) => entry.length > 0).join('\n') || 'Start a new request';
+};
 
 const withThreadMetadata = (
   thread: ChatThread,
@@ -282,6 +295,7 @@ export const useModexApp = (client: RemoteAppClient) => {
     () =>
       bootstrapWorkspace() ?? {
         activeChatId: null,
+        attachmentsByChatId: {},
         chatMap: {},
         chatSettingsByChatId: {},
         chats: [],
@@ -311,6 +325,7 @@ export const useModexApp = (client: RemoteAppClient) => {
 
           setState({
             activeChatId: created.id,
+            attachmentsByChatId: {},
             chatMap: {
               [created.id]: created,
             },
@@ -369,6 +384,7 @@ export const useModexApp = (client: RemoteAppClient) => {
 
         setState({
           activeChatId,
+          attachmentsByChatId: {},
           chatMap,
           chatSettingsByChatId,
           chats: hydratedChats,
@@ -535,15 +551,42 @@ export const useModexApp = (client: RemoteAppClient) => {
         ...current.chatSettingsByChatId,
         [chatId]: {
           accessMode: settings.accessMode,
+          model: settings.model,
+          reasoningEffort: settings.reasoningEffort,
           roots: settings.roots,
         },
       },
     }));
   };
 
+  const addAttachments = (chatId: string, attachments: PendingAttachment[]) => {
+    if (attachments.length === 0) {
+      return;
+    }
+
+    setState((current) => ({
+      ...current,
+      attachmentsByChatId: {
+        ...current.attachmentsByChatId,
+        [chatId]: [...(current.attachmentsByChatId[chatId] ?? []), ...attachments],
+      },
+    }));
+  };
+
+  const removeAttachment = (chatId: string, attachmentId: string) => {
+    setState((current) => ({
+      ...current,
+      attachmentsByChatId: {
+        ...current.attachmentsByChatId,
+        [chatId]: (current.attachmentsByChatId[chatId] ?? []).filter((attachment) => attachment.id !== attachmentId),
+      },
+    }));
+  };
+
   const sendMessage = async () => {
     const activeDraft = state.activeChatId ? state.draftsByChatId[state.activeChatId] ?? '' : '';
-    if (!state.activeChatId || !activeDraft.trim()) {
+    const activeAttachments = state.activeChatId ? state.attachmentsByChatId[state.activeChatId] ?? [] : [];
+    if (!state.activeChatId || (!activeDraft.trim() && activeAttachments.length === 0)) {
       return;
     }
 
@@ -554,9 +597,14 @@ export const useModexApp = (client: RemoteAppClient) => {
     }
 
     const content = activeDraft.trim();
+    const optimisticContent = optimisticPreviewFromInputs(content, activeAttachments);
     const optimisticMessageId = `optimistic-${Date.now()}`;
     setState((current) => ({
       ...current,
+      attachmentsByChatId: {
+        ...current.attachmentsByChatId,
+        [chatId]: [],
+      },
       error: null,
       openTabs: ensureTab(current.openTabs, chatId, 'running', {
         hasUnreadCompletion: false,
@@ -576,14 +624,14 @@ export const useModexApp = (client: RemoteAppClient) => {
                   {
                     id: optimisticMessageId,
                     role: 'user',
-                    content,
+                    content: optimisticContent,
                     createdAt: new Date().toISOString(),
                     turnId: null,
                   },
                 ],
               },
               {
-                preview: previewFromContent(content),
+                preview: previewFromContent(optimisticContent),
                 status: 'running',
                 updatedAt: new Date().toISOString(),
               },
@@ -594,6 +642,7 @@ export const useModexApp = (client: RemoteAppClient) => {
 
     try {
       const thread = await client.sendMessage({
+        attachments: activeAttachments,
         chatId,
         content,
         settings: state.chatSettingsByChatId[chatId],
@@ -602,6 +651,10 @@ export const useModexApp = (client: RemoteAppClient) => {
     } catch (error) {
       setState((current) => ({
         ...current,
+        attachmentsByChatId: {
+          ...current.attachmentsByChatId,
+          [chatId]: activeAttachments,
+        },
         error: error instanceof Error ? error.message : 'Unable to send message',
         draftsByChatId: {
           ...current.draftsByChatId,
@@ -611,15 +664,9 @@ export const useModexApp = (client: RemoteAppClient) => {
         chatMap: current.chatMap[chatId]
           ? {
               ...current.chatMap,
-              [chatId]: withThreadMetadata(
-                {
-                  ...current.chatMap[chatId],
-                  messages: current.chatMap[chatId].messages.filter((message) => message.id !== optimisticMessageId),
-                },
-                {
-                  status: 'idle',
-                },
-              ),
+              [chatId]: withThreadMetadata(current.chatMap[chatId], {
+                status: 'idle',
+              }),
             }
           : current.chatMap,
       }));
@@ -690,6 +737,7 @@ export const useModexApp = (client: RemoteAppClient) => {
   };
 
   const activeChat = state.activeChatId ? state.chatMap[state.activeChatId] ?? null : null;
+  const activeAttachments = state.activeChatId ? state.attachmentsByChatId[state.activeChatId] ?? [] : [];
   const activeDraft = state.activeChatId ? state.draftsByChatId[state.activeChatId] ?? '' : '';
   const activeChatSettings = state.activeChatId ? state.chatSettingsByChatId[state.activeChatId] ?? null : null;
   const activeInteraction = state.activeChatId ? state.interactionByChatId[state.activeChatId] ?? null : null;
@@ -699,12 +747,15 @@ export const useModexApp = (client: RemoteAppClient) => {
       ...state,
       activateChat,
       activeChat,
+      activeAttachments,
       activeChatSettings,
       activeInteraction,
+      addAttachments,
       closeTab,
       createChat,
       draft: activeDraft,
       interruptTurn,
+      removeAttachment,
       respondToApproval,
       sendMessage,
       setChatSettings,

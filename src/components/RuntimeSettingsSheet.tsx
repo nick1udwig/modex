@@ -446,6 +446,8 @@ export const RuntimeSettingsSheet = ({
             onClick={() =>
               onSubmit({
                 accessMode,
+                model: settings.model,
+                reasoningEffort: settings.reasoningEffort,
                 roots: dedupeRoots(roots),
               })
             }

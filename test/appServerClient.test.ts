@@ -38,6 +38,7 @@ test('mapThreadSummary prefers explicit thread names and running status', () => 
       updatedAt: 1_710_000_120,
     }),
     {
+      cwd: '/workspace/project',
       id: 'thr_123',
       preview: 'Prepare release notes',
       status: 'running',
@@ -126,6 +127,7 @@ test('mapThread flattens turn history into chat messages', () => {
   });
 
   assert.equal(thread.title, 'Explain the deployment error');
+  assert.equal(thread.cwd, '/workspace/project');
   assert.equal(thread.preview, 'The service is missing its runtime env vars.');
   assert.deepEqual(
     thread.messages.map((message) => ({

@@ -91,6 +91,7 @@ const sanitizeChatSummary = (value: unknown): ChatSummary | null => {
   }
 
   const summary = value as Partial<ChatSummary>;
+  const cwd = typeof summary.cwd === 'string' ? summary.cwd : '';
   const id = typeof summary.id === 'string' ? summary.id.trim() : '';
   const title = typeof summary.title === 'string' ? summary.title.trim() : '';
   const preview = typeof summary.preview === 'string' ? summary.preview : '';
@@ -102,6 +103,7 @@ const sanitizeChatSummary = (value: unknown): ChatSummary | null => {
   }
 
   return {
+    cwd,
     id,
     preview,
     status,
@@ -171,6 +173,7 @@ const sanitizeActivityEntry = (value: unknown): ActivityEntry | null => {
 };
 
 const summarizeCachedThread = (thread: ChatThread): ChatSummary => ({
+  cwd: thread.cwd,
   id: thread.id,
   preview: thread.preview,
   status: thread.status,
@@ -278,6 +281,17 @@ export const sanitizeWorkspaceSnapshot = (
         'accessMode' in value && (value.accessMode === 'read-only' || value.accessMode === 'workspace-write')
           ? value.accessMode
           : null;
+      const model = 'model' in value && typeof value.model === 'string' && value.model.trim().length > 0 ? value.model : null;
+      const reasoningEffort =
+        'reasoningEffort' in value &&
+        (value.reasoningEffort === 'none' ||
+          value.reasoningEffort === 'minimal' ||
+          value.reasoningEffort === 'low' ||
+          value.reasoningEffort === 'medium' ||
+          value.reasoningEffort === 'high' ||
+          value.reasoningEffort === 'xhigh')
+          ? value.reasoningEffort
+          : null;
 
       if (!accessMode) {
         return [];
@@ -288,6 +302,8 @@ export const sanitizeWorkspaceSnapshot = (
           chatId,
           {
             accessMode,
+            model,
+            reasoningEffort,
             roots: sanitizeRoots('roots' in value ? value.roots : undefined),
           } satisfies ChatRuntimeSettings,
         ] satisfies [string, ChatRuntimeSettings],

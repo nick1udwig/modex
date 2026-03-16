@@ -11,6 +11,9 @@ import type {
   CreateChatPayload,
   JsonRpcId,
   Message,
+  ModelOption,
+  PendingAttachment,
+  ReasoningEffort,
   RemoteAppClient,
   RemoteThreadEvent,
   SendMessagePayload,
@@ -81,6 +84,23 @@ interface RawThreadResumeResponse {
 
 interface RawTurnStartResponse {
   turn: RawTurn;
+}
+
+interface RawModelListResponse {
+  data: RawModel[];
+  nextCursor?: string | null;
+}
+
+interface RawModel {
+  defaultReasoningEffort: ReasoningEffort;
+  displayName: string;
+  hidden: boolean;
+  isDefault: boolean;
+  model: string;
+  supportedReasoningEfforts: Array<{
+    description: string;
+    reasoningEffort: ReasoningEffort;
+  }>;
 }
 
 interface RawThread {
@@ -436,7 +456,7 @@ const buildSandboxPolicy = (config: AppServerConfig, settings: ChatRuntimeSettin
     return {
       access: {
         includePlatformDefaults: true,
-        readableRoots: roots.slice(1),
+        readableRoots: roots,
         type: 'restricted',
       },
       networkAccess: false,
@@ -454,7 +474,7 @@ const buildSandboxPolicy = (config: AppServerConfig, settings: ChatRuntimeSettin
       type: 'restricted',
     },
     type: 'workspaceWrite',
-    writableRoots: roots.slice(1),
+    writableRoots: roots,
   };
 };
 
@@ -465,7 +485,7 @@ const buildThreadStartParams = (config: AppServerConfig, settings: ChatRuntimeSe
     approvalPolicy: config.approvalPolicy,
     cwd: primaryRoot(settings, config.cwd),
     experimentalRawEvents: false,
-    model: config.model,
+    model: settings?.model ?? config.model,
     modelProvider: config.modelProvider,
     persistExtendedHistory: true,
     sandbox: coarseSandboxMode(accessMode),
@@ -482,12 +502,70 @@ const buildThreadResumeParams = (
   return omitUndefined({
     approvalPolicy: config.approvalPolicy,
     cwd: primaryRoot(settings, config.cwd),
-    model: config.model,
+    model: settings?.model ?? config.model,
     modelProvider: config.modelProvider,
     persistExtendedHistory: true,
     sandbox: coarseSandboxMode(accessMode),
     threadId: chatId,
   });
+};
+
+const buildTextInput = (text: string) => ({
+  text,
+  textElements: [],
+  type: 'text' as const,
+});
+
+const attachmentText = (attachment: PendingAttachment) => {
+  if (attachment.kind !== 'text-file') {
+    return null;
+  }
+
+  const body = attachment.text?.trim();
+  if (!body) {
+    return null;
+  }
+
+  return `Attached file: ${attachment.name}\n\n${body}`;
+};
+
+const buildTurnInputs = (content: string, attachments: PendingAttachment[]) => {
+  const inputs: Array<
+    | {
+        text: string;
+        textElements: never[];
+        type: 'text';
+      }
+    | {
+        type: 'image';
+        url: string;
+      }
+  > = [];
+
+  attachments.forEach((attachment) => {
+    if (attachment.kind === 'image') {
+      if (attachment.url) {
+        inputs.push({
+          type: 'image',
+          url: attachment.url,
+        });
+      }
+      return;
+    }
+
+    const text = attachmentText(attachment);
+    if (text) {
+      inputs.push(buildTextInput(text));
+    }
+  });
+
+  const prompt = content.trim();
+
+  if (prompt.length > 0 || inputs.length === 0) {
+    inputs.unshift(buildTextInput(prompt));
+  }
+
+  return inputs;
 };
 
 const buildTurnStartParams = (
@@ -497,13 +575,9 @@ const buildTurnStartParams = (
   omitUndefined({
     approvalPolicy: config.approvalPolicy,
     cwd: primaryRoot(payload.settings, config.cwd),
-    input: [
-      {
-        text: payload.content,
-        textElements: [],
-        type: 'text',
-      },
-    ],
+    effort: payload.settings?.reasoningEffort ?? undefined,
+    input: buildTurnInputs(payload.content, payload.attachments ?? []),
+    model: payload.settings?.model ?? config.model,
     sandboxPolicy: buildSandboxPolicy(config, payload.settings),
     threadId: payload.chatId,
   });
@@ -890,6 +964,7 @@ export const flattenUserInputs = (inputs: RawUserInput[]) =>
     .join('\n');
 
 export const mapThreadSummary = (thread: RawThread): ChatSummary => ({
+  cwd: thread.cwd,
   id: thread.id,
   preview: compactPreview(fallbackPreview(thread) || thread.preview),
   status: normalizeStatus(thread.status),
@@ -1184,6 +1259,7 @@ class AppServerConnection {
 }
 
 const summaryFromThread = (thread: ChatThread): ChatSummary => ({
+  cwd: thread.cwd,
   id: thread.id,
   preview: thread.preview,
   status: thread.status,
@@ -1285,6 +1361,30 @@ export class AppServerClient implements RemoteAppClient {
     });
 
     return summaries;
+  }
+
+  async listModels() {
+    const connection = await this.ensureConnection();
+    const models: RawModel[] = [];
+    let cursor: string | null = null;
+
+    do {
+      const response: RawModelListResponse = await connection.request<RawModelListResponse>('model/list', {
+        cursor,
+        includeHidden: false,
+        limit: 100,
+      });
+      models.push(...response.data.filter((model: RawModel) => !model.hidden));
+      cursor = response.nextCursor ?? null;
+    } while (cursor);
+
+    return models.map((model) => ({
+      defaultReasoningEffort: model.defaultReasoningEffort ?? null,
+      displayName: model.displayName,
+      id: model.model,
+      isDefault: model.isDefault,
+      supportedReasoningEfforts: model.supportedReasoningEfforts.map((option) => option.reasoningEffort),
+    })) satisfies ModelOption[];
   }
 
   async sendMessage(payload: SendMessagePayload) {

@@ -44,6 +44,7 @@ export const updateChatSummary = (chats: ChatSummary[], thread: ChatThread) => {
 };
 
 export const summarizeThread = (thread: ChatThread): ChatSummary => ({
+  cwd: thread.cwd,
   id: thread.id,
   preview: thread.preview,
   status: thread.status,

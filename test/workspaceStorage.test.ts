@@ -54,6 +54,8 @@ test('sanitizeWorkspaceSnapshot keeps valid runtime settings per chat', () => {
       chatSettingsByChatId: {
         'chat-a': {
           accessMode: 'workspace-write',
+          model: 'gpt-5.4',
+          reasoningEffort: 'xhigh',
           roots: ['/workspace/a', '/workspace/shared', '/workspace/a'],
         },
         'chat-b': {
@@ -69,6 +71,8 @@ test('sanitizeWorkspaceSnapshot keeps valid runtime settings per chat', () => {
   assert.deepEqual(snapshot.chatSettingsByChatId, {
     'chat-a': {
       accessMode: 'workspace-write',
+      model: 'gpt-5.4',
+      reasoningEffort: 'xhigh',
       roots: ['/workspace/a', '/workspace/shared'],
     },
   });
@@ -80,6 +84,7 @@ test('sanitizeWorkspaceSnapshot restores cached chats and hydrated threads for i
       activeChatId: 'chat-a',
       cachedChats: [
         {
+          cwd: '/workspace/a',
           id: 'chat-a',
           preview: 'Cached summary',
           status: 'idle',
@@ -125,6 +130,7 @@ test('sanitizeWorkspaceSnapshot restores cached chats and hydrated threads for i
 
   assert.deepEqual(snapshot.cachedChats, [
     {
+      cwd: '/workspace/a',
       id: 'chat-a',
       preview: 'Thread preview',
       status: 'running',
