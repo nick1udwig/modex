@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ChatSummary, ChatThread } from '../src/app/types.ts';
-import { defaultOpenTabs, ensureTab, setTabStatusIfOpen, setTabUnreadIfOpen, updateChatSummary } from '../src/state/modexState.ts';
+import {
+  defaultOpenTabs,
+  ensureTab,
+  mergeThreadSummary,
+  setTabStatusIfOpen,
+  setTabUnreadIfOpen,
+  updateChatSummary,
+} from '../src/state/modexState.ts';
 
 test('ensureTab appends new tabs and updates existing status', () => {
   const initial = [{ chatId: 'chat-a', hasUnreadCompletion: false, status: 'idle' as const }];
@@ -97,4 +104,44 @@ test('defaultOpenTabs opens the first two chats for a fresh workspace', () => {
     { chatId: 'chat-a', hasUnreadCompletion: false, status: 'idle' },
     { chatId: 'chat-b', hasUnreadCompletion: false, status: 'running' },
   ]);
+});
+
+test('mergeThreadSummary refreshes cached metadata without discarding messages', () => {
+  const thread: ChatThread = {
+    activity: [],
+    cwd: '/workspace/cached',
+    id: 'chat-a',
+    messages: [
+      {
+        content: 'Existing cached reply',
+        createdAt: '2026-03-16T10:00:00.000Z',
+        id: 'msg-1',
+        role: 'assistant',
+        turnId: 'turn-1',
+      },
+    ],
+    preview: 'Cached preview',
+    status: 'running',
+    title: 'Cached title',
+    tokenUsageLabel: null,
+    updatedAt: '2026-03-16T10:00:00.000Z',
+  };
+
+  const summary: ChatSummary = {
+    cwd: '/workspace/live',
+    id: 'chat-a',
+    preview: 'Fresh summary preview',
+    status: 'idle',
+    title: 'Fresh summary title',
+    updatedAt: '2026-03-16T10:05:00.000Z',
+  };
+
+  assert.deepEqual(mergeThreadSummary(thread, summary), {
+    ...thread,
+    cwd: '/workspace/live',
+    preview: 'Fresh summary preview',
+    status: 'idle',
+    title: 'Fresh summary title',
+    updatedAt: '2026-03-16T10:05:00.000Z',
+  });
 });

@@ -4,6 +4,7 @@ import {
   buildInitializeParams,
   flattenUserInputs,
   isAppServerConnectionClosedError,
+  isAppServerTurnWaitTimeoutError,
   mapThread,
   mapThreadSummary,
   shouldResumeAfterTurnStartError,
@@ -221,4 +222,10 @@ test('isAppServerConnectionClosedError only matches established websocket discon
   assert.equal(isAppServerConnectionClosedError(new Error('App-server connection closed: ws://localhost:4222')), true);
   assert.equal(isAppServerConnectionClosedError(new Error('Unable to connect to app-server at ws://localhost:4222')), false);
   assert.equal(isAppServerConnectionClosedError(new Error('The app-server turn failed')), false);
+});
+
+test('isAppServerTurnWaitTimeoutError only matches turn wait timeouts', () => {
+  assert.equal(isAppServerTurnWaitTimeoutError(new Error('Timed out waiting for the app-server to finish the turn')), true);
+  assert.equal(isAppServerTurnWaitTimeoutError(new Error('App-server connection closed: ws://localhost:4222')), false);
+  assert.equal(isAppServerTurnWaitTimeoutError(new Error('The app-server turn failed')), false);
 });

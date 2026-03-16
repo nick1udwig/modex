@@ -1,5 +1,14 @@
 import type { ChatSummary, ChatTab, ChatThread, Message } from '../app/types';
 
+export const mergeThreadSummary = (thread: ChatThread, summary: ChatSummary): ChatThread => ({
+  ...thread,
+  cwd: summary.cwd,
+  preview: summary.preview,
+  status: summary.status,
+  title: summary.title,
+  updatedAt: summary.updatedAt,
+});
+
 export const ensureTab = (
   tabs: ChatTab[],
   chatId: string,

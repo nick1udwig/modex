@@ -403,6 +403,9 @@ export const buildInitializeParams = () => ({
 export const isAppServerConnectionClosedError = (error: unknown) =>
   error instanceof Error && error.message.startsWith('App-server connection closed:');
 
+export const isAppServerTurnWaitTimeoutError = (error: unknown) =>
+  error instanceof Error && error.message === 'Timed out waiting for the app-server to finish the turn';
+
 const omitUndefined = <T extends Record<string, unknown>>(value: T) =>
   Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 
@@ -1413,7 +1416,7 @@ export class AppServerClient implements RemoteAppClient {
       await connection.waitForTurnCompletion(payload.chatId, started.turn.id);
       return await this.getChat(payload.chatId);
     } catch (error) {
-      if (!isAppServerConnectionClosedError(error)) {
+      if (!isAppServerConnectionClosedError(error) && !isAppServerTurnWaitTimeoutError(error)) {
         throw error;
       }
 

@@ -14,6 +14,7 @@ import {
   appendMessageDelta,
   defaultOpenTabs,
   ensureTab,
+  mergeThreadSummary,
   replaceOrAppendMessage,
   setTabStatusIfOpen,
   setTabUnreadIfOpen,
@@ -367,13 +368,20 @@ export const useModexApp = (client: RemoteAppClient) => {
           return;
         }
 
+        const hydratedChats = hydratedThreads.reduce(updateChatSummary, chats);
+        const summaryByChatId = new Map(hydratedChats.map((chat) => [chat.id, chat] satisfies [string, ChatSummary]));
+        const cachedThreads = Object.fromEntries(
+          Object.entries(workspace?.cachedThreadsByChatId ?? {}).map(([chatId, thread]) => {
+            const summary = summaryByChatId.get(chatId);
+            return [chatId, summary ? mergeThreadSummary(thread, summary) : thread] satisfies [string, ChatThread];
+          }),
+        );
         const chatMap = {
-          ...(workspace?.cachedThreadsByChatId ?? {}),
+          ...cachedThreads,
           ...Object.fromEntries(
             hydratedThreads.map((thread) => [thread.id, thread] satisfies [string, ChatThread]),
           ),
         };
-        const hydratedChats = hydratedThreads.reduce(updateChatSummary, chats);
         const chatSettingsByChatId = {
           ...(workspace?.chatSettingsByChatId ?? {}),
         };
