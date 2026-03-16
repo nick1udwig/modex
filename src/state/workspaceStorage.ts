@@ -1,7 +1,9 @@
-import type { ChatRuntimeSettings } from '../app/types';
+import type { ChatRuntimeSettings, ChatStatus, ChatSummary, ChatThread, Message, MessageRole } from '../app/types';
 
 interface WorkspaceSnapshot {
   activeChatId: string | null;
+  cachedChats: ChatSummary[];
+  cachedThreadsByChatId: Record<string, ChatThread>;
   chatSettingsByChatId: Record<string, ChatRuntimeSettings>;
   draftsByChatId: Record<string, string>;
   openChatIds: string[];
@@ -9,12 +11,16 @@ interface WorkspaceSnapshot {
 
 interface RawWorkspaceSnapshot {
   activeChatId?: string | null;
+  cachedChats?: unknown;
+  cachedThreadsByChatId?: Record<string, unknown>;
   chatSettingsByChatId?: Record<string, unknown>;
   draftsByChatId?: Record<string, unknown>;
   openChatIds?: string[];
 }
 
 const STORAGE_KEY = 'modex.workspace.v1';
+const VALID_CHAT_STATUSES = new Set<ChatStatus>(['idle', 'running']);
+const VALID_MESSAGE_ROLES = new Set<MessageRole>(['assistant', 'system', 'user']);
 
 const dedupeIds = (chatIds: string[]) => {
   const seen = new Set<string>();
@@ -48,9 +54,147 @@ const sanitizeRoots = (roots: unknown) => {
     });
 };
 
+const normalizeIsoDate = (value: unknown) => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim();
+  if (normalized.length === 0 || Number.isNaN(Date.parse(normalized))) {
+    return null;
+  }
+
+  return normalized;
+};
+
+const normalizeChatStatus = (value: unknown): ChatStatus | null =>
+  typeof value === 'string' && VALID_CHAT_STATUSES.has(value as ChatStatus) ? (value as ChatStatus) : null;
+
+const normalizeMessageRole = (value: unknown): MessageRole | null =>
+  typeof value === 'string' && VALID_MESSAGE_ROLES.has(value as MessageRole) ? (value as MessageRole) : null;
+
+const sanitizeChatSummary = (value: unknown): ChatSummary | null => {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const summary = value as Partial<ChatSummary>;
+  const id = typeof summary.id === 'string' ? summary.id.trim() : '';
+  const title = typeof summary.title === 'string' ? summary.title.trim() : '';
+  const preview = typeof summary.preview === 'string' ? summary.preview : '';
+  const status = normalizeChatStatus(summary.status);
+  const updatedAt = normalizeIsoDate(summary.updatedAt);
+
+  if (!id || !title || status === null || updatedAt === null) {
+    return null;
+  }
+
+  return {
+    id,
+    preview,
+    status,
+    title,
+    updatedAt,
+  };
+};
+
+const sanitizeMessage = (value: unknown): Message | null => {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const message = value as Partial<Message>;
+  const id = typeof message.id === 'string' ? message.id.trim() : '';
+  const content = typeof message.content === 'string' ? message.content : '';
+  const role = normalizeMessageRole(message.role);
+  const createdAt = normalizeIsoDate(message.createdAt);
+
+  if (!id || role === null || createdAt === null) {
+    return null;
+  }
+
+  return {
+    content,
+    createdAt,
+    id,
+    role,
+  };
+};
+
+const summarizeCachedThread = (thread: ChatThread): ChatSummary => ({
+  id: thread.id,
+  preview: thread.preview,
+  status: thread.status,
+  title: thread.title,
+  updatedAt: thread.updatedAt,
+});
+
+const sanitizeChatThread = (value: unknown): ChatThread | null => {
+  const summary = sanitizeChatSummary(value);
+  if (!summary || typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const thread = value as Partial<ChatThread>;
+  const cwd = typeof thread.cwd === 'string' ? thread.cwd : '';
+  const tokenUsageLabel = typeof thread.tokenUsageLabel === 'string' ? thread.tokenUsageLabel : null;
+  const messages = Array.isArray(thread.messages)
+    ? thread.messages.map(sanitizeMessage).filter((message): message is Message => Boolean(message))
+    : [];
+
+  return {
+    ...summary,
+    cwd,
+    messages,
+    tokenUsageLabel,
+  };
+};
+
+const dedupeAndSortSummaries = (summaries: ChatSummary[]) => {
+  const summaryMap = new Map<string, ChatSummary>();
+
+  summaries.forEach((summary) => {
+    const current = summaryMap.get(summary.id);
+    if (!current || current.updatedAt.localeCompare(summary.updatedAt) < 0) {
+      summaryMap.set(summary.id, summary);
+    }
+  });
+
+  return [...summaryMap.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+};
+
+const deriveValidChatIds = (snapshot: RawWorkspaceSnapshot) => {
+  const ids = new Set<string>();
+
+  if (typeof snapshot.activeChatId === 'string' && snapshot.activeChatId.trim().length > 0) {
+    ids.add(snapshot.activeChatId);
+  }
+
+  (snapshot.openChatIds ?? []).forEach((chatId) => {
+    if (typeof chatId === 'string' && chatId.trim().length > 0) {
+      ids.add(chatId);
+    }
+  });
+
+  Object.keys(snapshot.chatSettingsByChatId ?? {}).forEach((chatId) => ids.add(chatId));
+  Object.keys(snapshot.draftsByChatId ?? {}).forEach((chatId) => ids.add(chatId));
+  Object.keys(snapshot.cachedThreadsByChatId ?? {}).forEach((chatId) => ids.add(chatId));
+
+  if (Array.isArray(snapshot.cachedChats)) {
+    snapshot.cachedChats.forEach((value) => {
+      const summary = sanitizeChatSummary(value);
+      if (summary) {
+        ids.add(summary.id);
+      }
+    });
+  }
+
+  return [...ids];
+};
+
 export const sanitizeWorkspaceSnapshot = (
   snapshot: RawWorkspaceSnapshot,
-  validChatIds: string[],
+  validChatIds: string[] = deriveValidChatIds(snapshot),
 ): WorkspaceSnapshot => {
   const validIdSet = new Set(validChatIds);
   const openChatIds = dedupeIds(snapshot.openChatIds ?? []).filter((chatId) => validIdSet.has(chatId));
@@ -95,47 +239,84 @@ export const sanitizeWorkspaceSnapshot = (
       ];
     }),
   ) as Record<string, ChatRuntimeSettings>;
+  const cachedThreadsByChatId = Object.fromEntries(
+    Object.entries(snapshot.cachedThreadsByChatId ?? {}).flatMap(([chatId, value]) => {
+      if (!validIdSet.has(chatId)) {
+        return [];
+      }
+
+      const thread = sanitizeChatThread(value);
+      if (!thread) {
+        return [];
+      }
+
+      return [[chatId, thread] satisfies [string, ChatThread]];
+    }),
+  ) as Record<string, ChatThread>;
+  const cachedChats = dedupeAndSortSummaries([
+    ...(Array.isArray(snapshot.cachedChats)
+      ? snapshot.cachedChats
+          .map(sanitizeChatSummary)
+          .filter((summary): summary is ChatSummary => Boolean(summary))
+          .filter((summary) => validIdSet.has(summary.id))
+      : []),
+    ...Object.values(cachedThreadsByChatId).map(summarizeCachedThread),
+  ]);
 
   return {
     activeChatId: activeChatId ?? openChatIds[0] ?? null,
+    cachedChats,
+    cachedThreadsByChatId,
     chatSettingsByChatId,
     draftsByChatId,
     openChatIds,
   };
 };
 
-export const loadWorkspaceSnapshot = (validChatIds: string[]) => {
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    return null;
-  }
-
+export const loadWorkspaceSnapshot = (validChatIds?: string[]) => {
   try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
     const parsed = JSON.parse(raw) as RawWorkspaceSnapshot;
     return sanitizeWorkspaceSnapshot(parsed, validChatIds);
   } catch {
-    window.localStorage.removeItem(STORAGE_KEY);
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Ignore storage cleanup failures.
+    }
     return null;
   }
 };
 
 export const saveWorkspaceSnapshot = ({
   activeChatId,
+  cachedChats,
+  cachedThreadsByChatId,
   chatSettingsByChatId,
   draftsByChatId,
   openChatIds,
 }: WorkspaceSnapshot) => {
-  window.localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      activeChatId,
-      chatSettingsByChatId: Object.fromEntries(
-        Object.entries(chatSettingsByChatId).filter(([, settings]) => settings.accessMode && settings.roots),
-      ),
-      draftsByChatId: Object.fromEntries(
-        Object.entries(draftsByChatId).filter(([, draft]) => draft.trim().length > 0),
-      ),
-      openChatIds,
-    } satisfies WorkspaceSnapshot),
-  );
+  try {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        activeChatId,
+        cachedChats,
+        cachedThreadsByChatId,
+        chatSettingsByChatId: Object.fromEntries(
+          Object.entries(chatSettingsByChatId).filter(([, settings]) => settings.accessMode && settings.roots),
+        ),
+        draftsByChatId: Object.fromEntries(
+          Object.entries(draftsByChatId).filter(([, draft]) => draft.trim().length > 0),
+        ),
+        openChatIds,
+      } satisfies WorkspaceSnapshot),
+    );
+  } catch {
+    // Ignore storage quota and availability errors.
+  }
 };

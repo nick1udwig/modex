@@ -18,6 +18,8 @@ test('sanitizeWorkspaceSnapshot filters invalid chats and restores active tabs',
 
   assert.deepEqual(snapshot, {
     activeChatId: 'chat-b',
+    cachedChats: [],
+    cachedThreadsByChatId: {},
     chatSettingsByChatId: {},
     openChatIds: ['chat-a', 'chat-b'],
     draftsByChatId: {
@@ -38,6 +40,8 @@ test('sanitizeWorkspaceSnapshot falls back to the first valid open tab when acti
 
   assert.deepEqual(snapshot, {
     activeChatId: 'chat-a',
+    cachedChats: [],
+    cachedThreadsByChatId: {},
     chatSettingsByChatId: {},
     openChatIds: ['chat-a', 'chat-b'],
     draftsByChatId: {},
@@ -68,4 +72,53 @@ test('sanitizeWorkspaceSnapshot keeps valid runtime settings per chat', () => {
       roots: ['/workspace/a', '/workspace/shared'],
     },
   });
+});
+
+test('sanitizeWorkspaceSnapshot restores cached chats and hydrated threads for immediate boot', () => {
+  const snapshot = sanitizeWorkspaceSnapshot(
+    {
+      activeChatId: 'chat-a',
+      cachedChats: [
+        {
+          id: 'chat-a',
+          preview: 'Cached summary',
+          status: 'idle',
+          title: 'Cached A',
+          updatedAt: '2026-03-14T10:00:00.000Z',
+        },
+      ],
+      cachedThreadsByChatId: {
+        'chat-a': {
+          cwd: '/workspace/a',
+          id: 'chat-a',
+          messages: [
+            {
+              content: 'Cached message',
+              createdAt: '2026-03-14T10:00:00.000Z',
+              id: 'msg-1',
+              role: 'assistant',
+            },
+          ],
+          preview: 'Thread preview',
+          status: 'running',
+          title: 'Cached A',
+          tokenUsageLabel: '1.2k tokens',
+          updatedAt: '2026-03-14T10:01:00.000Z',
+        },
+      },
+      openChatIds: ['chat-a'],
+    },
+    ['chat-a'],
+  );
+
+  assert.deepEqual(snapshot.cachedChats, [
+    {
+      id: 'chat-a',
+      preview: 'Thread preview',
+      status: 'running',
+      title: 'Cached A',
+      updatedAt: '2026-03-14T10:01:00.000Z',
+    },
+  ]);
+  assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.messages[0]?.content, 'Cached message');
 });

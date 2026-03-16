@@ -88,7 +88,7 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		Addr:           envStringAny([]string{"MODEX_SIDECAR_ADDR"}, defaultAddr),
-		AllowedOrigins: defaultOrigins(splitCSVAny([]string{"MODEX_SIDECAR_ALLOWED_ORIGINS"})),
+		AllowedOrigins: splitCSVAny([]string{"MODEX_SIDECAR_ALLOWED_ORIGINS"}),
 		AuthToken:      strings.TrimSpace(envStringAny([]string{"MODEX_SIDECAR_AUTH_TOKEN"}, "")),
 		Filesystem: FilesystemConfig{
 			AllowedRoots:     splitCSVAny([]string{"MODEX_FS_ROOTS", "MODEX_SIDECAR_FS_ROOTS"}),
@@ -221,17 +221,4 @@ func splitCSVAny(keys []string) []string {
 	}
 
 	return nil
-}
-
-func defaultOrigins(origins []string) []string {
-	if len(origins) > 0 {
-		return origins
-	}
-
-	return []string{
-		"http://localhost:5173",
-		"http://127.0.0.1:5173",
-		"http://localhost:4173",
-		"http://127.0.0.1:4173",
-	}
 }

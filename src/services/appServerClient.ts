@@ -21,6 +21,9 @@ const NOTIFICATION_OPTOUTS = [
   'item/fileChange/outputDelta',
   'item/commandExecution/terminalInteraction',
 ] as const;
+const APP_SERVER_RECONNECT_DELAYS_MS = [300, 1_000, 2_500, 5_000] as const;
+const TURN_RECOVERY_POLL_MS = 1_000;
+const TURN_RECOVERY_TIMEOUT_MS = 10 * 60 * 1_000;
 
 interface AppServerConfig {
   approvalPolicy?: 'untrusted' | 'on-failure' | 'on-request' | 'never';
@@ -327,6 +330,17 @@ const compactPreview = (text: string) => compactSummaryText(text) || 'Start a ne
 
 export const shouldResumeAfterTurnStartError = (error: unknown) =>
   error instanceof Error && error.message.includes('thread not found:');
+
+export const isAppServerConnectionClosedError = (error: unknown) =>
+  error instanceof Error && error.message.startsWith('App-server connection closed:');
+
+const isAppServerUnavailableError = (error: unknown) =>
+  error instanceof Error && error.message.startsWith('Unable to connect to app-server at ');
+
+const sleep = (durationMs: number) =>
+  new Promise<void>((resolve) => {
+    globalThis.setTimeout(resolve, durationMs);
+  });
 
 const normalizeStatus = (status: RawThreadStatus): ChatStatus => (status.type === 'active' ? 'running' : 'idle');
 
@@ -715,25 +729,49 @@ export class AppServerClient implements RemoteAppClient {
   private connection: AppServerConnection | null = null;
   private connectionPromise: Promise<AppServerConnection> | null = null;
   private listeners = new Set<(event: RemoteThreadEvent) => void>();
+  private reconnectAttempt = 0;
+  private reconnectSignalsBound = false;
+  private reconnectTimerId: ReturnType<typeof globalThis.setTimeout> | null = null;
   private refreshingThreadIds = new Set<string>();
+  private runningTurnIds = new Map<string, string>();
   private summaryCache = new Map<string, ChatSummary>();
   private threadCache = new Map<string, ChatThread>();
+  private readonly handleVisibilityChange = () => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      return;
+    }
+
+    this.nudgeReconnect();
+  };
+  private readonly handleReconnectSignal = () => {
+    this.nudgeReconnect();
+  };
 
   constructor(config: AppServerConfig = appServerConfig()) {
     this.config = config;
   }
 
   subscribe(listener: (event: RemoteThreadEvent) => void) {
+    const shouldBindReconnectSignals = this.listeners.size === 0;
     this.listeners.add(listener);
+    if (shouldBindReconnectSignals) {
+      this.bindReconnectSignals();
+    }
+
     void this.ensureConnection().catch((error) => {
       this.emit({
         message: error instanceof Error ? error.message : 'Unable to connect to app-server',
         type: 'error',
       });
+      this.scheduleReconnect();
     });
 
     return () => {
       this.listeners.delete(listener);
+      if (this.listeners.size === 0) {
+        this.unbindReconnectSignals();
+        this.clearReconnectTimer();
+      }
     };
   }
 
@@ -808,8 +846,19 @@ export class AppServerClient implements RemoteAppClient {
       started = await startTurn();
     }
 
-    await connection.waitForTurnCompletion(payload.chatId, started.turn.id);
-    return await this.getChat(payload.chatId);
+    this.runningTurnIds.set(payload.chatId, started.turn.id);
+    try {
+      await connection.waitForTurnCompletion(payload.chatId, started.turn.id);
+      this.runningTurnIds.delete(payload.chatId);
+      return await this.getChat(payload.chatId);
+    } catch (error) {
+      if (!isAppServerConnectionClosedError(error)) {
+        this.runningTurnIds.delete(payload.chatId);
+        throw error;
+      }
+
+      return await this.recoverTurnAfterDisconnect(payload.chatId, started.turn.id);
+    }
   }
 
   private emit(event: RemoteThreadEvent) {
@@ -826,21 +875,20 @@ export class AppServerClient implements RemoteAppClient {
     this.connectionPromise = AppServerConnection.open(this.config)
       .then((connection) => {
         this.connection = connection;
+        this.reconnectAttempt = 0;
+        this.clearReconnectTimer();
 
         connection.onNotification((notification) => {
           this.handleNotification(notification);
         });
 
-        connection.onClose((error) => {
+        connection.onClose(() => {
           if (this.connection === connection) {
             this.connection = null;
             this.connectionPromise = null;
           }
 
-          this.emit({
-            message: error.message,
-            type: 'error',
-          });
+          this.scheduleReconnect();
         });
 
         return connection;
@@ -852,6 +900,70 @@ export class AppServerClient implements RemoteAppClient {
       });
 
     return this.connectionPromise;
+  }
+
+  private bindReconnectSignals() {
+    if (this.reconnectSignalsBound || typeof window === 'undefined') {
+      return;
+    }
+
+    window.addEventListener('online', this.handleReconnectSignal);
+    window.addEventListener('pageshow', this.handleReconnectSignal);
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    this.reconnectSignalsBound = true;
+  }
+
+  private unbindReconnectSignals() {
+    if (!this.reconnectSignalsBound || typeof window === 'undefined') {
+      return;
+    }
+
+    window.removeEventListener('online', this.handleReconnectSignal);
+    window.removeEventListener('pageshow', this.handleReconnectSignal);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    this.reconnectSignalsBound = false;
+  }
+
+  private clearReconnectTimer() {
+    if (this.reconnectTimerId === null) {
+      return;
+    }
+
+    globalThis.clearTimeout(this.reconnectTimerId);
+    this.reconnectTimerId = null;
+  }
+
+  private nudgeReconnect() {
+    this.clearReconnectTimer();
+    this.scheduleReconnect(true);
+  }
+
+  private scheduleReconnect(immediate = false) {
+    if (this.listeners.size === 0 || this.connection || this.connectionPromise || this.reconnectTimerId !== null) {
+      return;
+    }
+
+    const delay = immediate
+      ? 0
+      : APP_SERVER_RECONNECT_DELAYS_MS[Math.min(this.reconnectAttempt, APP_SERVER_RECONNECT_DELAYS_MS.length - 1)];
+
+    if (!immediate) {
+      this.reconnectAttempt += 1;
+    }
+
+    this.reconnectTimerId = globalThis.setTimeout(() => {
+      this.reconnectTimerId = null;
+      void this.restoreConnection();
+    }, delay);
+  }
+
+  private async restoreConnection() {
+    try {
+      await this.ensureConnection();
+      await this.restoreAfterReconnect();
+    } catch {
+      this.scheduleReconnect();
+    }
   }
 
   private handleNotification(notification: JsonRpcNotification) {
@@ -866,6 +978,16 @@ export class AppServerClient implements RemoteAppClient {
         return;
       }
 
+      case 'turn/started': {
+        const params = notification.params as { threadId: string; turn: RawTurn } | undefined;
+        if (!params) {
+          return;
+        }
+
+        this.runningTurnIds.set(params.threadId, params.turn.id);
+        return;
+      }
+
       case 'thread/status/changed': {
         const params = notification.params as RawThreadStatusChangedNotification | undefined;
         if (!params) {
@@ -873,6 +995,9 @@ export class AppServerClient implements RemoteAppClient {
         }
 
         const status = normalizeStatus(params.status);
+        if (params.status.type !== 'active') {
+          this.runningTurnIds.delete(params.threadId);
+        }
         const cachedSummary = this.summaryCache.get(params.threadId);
         if (cachedSummary) {
           const summary = {
@@ -1011,6 +1136,8 @@ export class AppServerClient implements RemoteAppClient {
           return;
         }
 
+        this.runningTurnIds.delete(params.threadId);
+
         if (params.turn.status === 'failed') {
           this.emit({
             chatId: params.threadId,
@@ -1081,6 +1208,16 @@ export class AppServerClient implements RemoteAppClient {
     };
   }
 
+  private async readRawThread(chatId: string) {
+    const connection = await this.ensureConnection();
+    const response = await connection.request<RawThreadReadResponse>('thread/read', {
+      includeTurns: true,
+      threadId: chatId,
+    });
+
+    return response.thread;
+  }
+
   private storeSummary(summary: ChatSummary) {
     this.summaryCache.set(summary.id, summary);
     this.emit({
@@ -1098,7 +1235,7 @@ export class AppServerClient implements RemoteAppClient {
     });
   }
 
-  private async refreshThread(threadId: string) {
+  private async refreshThread(threadId: string, options?: { suppressError?: boolean }) {
     if (this.refreshingThreadIds.has(threadId)) {
       return;
     }
@@ -1108,14 +1245,70 @@ export class AppServerClient implements RemoteAppClient {
     try {
       await this.getChat(threadId);
     } catch (error) {
-      this.emit({
-        chatId: threadId,
-        message: error instanceof Error ? error.message : 'Unable to refresh chat',
-        type: 'error',
-      });
+      if (!options?.suppressError) {
+        this.emit({
+          chatId: threadId,
+          message: error instanceof Error ? error.message : 'Unable to refresh chat',
+          type: 'error',
+        });
+      }
     } finally {
       this.refreshingThreadIds.delete(threadId);
     }
+  }
+
+  private async restoreAfterReconnect() {
+    const activeThreadIds = new Set<string>();
+
+    this.runningTurnIds.forEach((_, chatId) => {
+      activeThreadIds.add(chatId);
+    });
+
+    this.threadCache.forEach((thread) => {
+      if (thread.status === 'running') {
+        activeThreadIds.add(thread.id);
+      }
+    });
+
+    await Promise.allSettled(
+      [...activeThreadIds].map((threadId) => this.refreshThread(threadId, { suppressError: true })),
+    );
+  }
+
+  private async recoverTurnAfterDisconnect(chatId: string, turnId: string) {
+    const deadline = Date.now() + TURN_RECOVERY_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      try {
+        const rawThread = await this.readRawThread(chatId);
+        const thread = this.mergeThread(mapThread(rawThread));
+        this.storeThread(thread);
+        const turn = rawThread.turns.find((candidate) => candidate.id === turnId) ?? null;
+
+        if (!turn) {
+          if (thread.status !== 'running') {
+            this.runningTurnIds.delete(chatId);
+            return thread;
+          }
+        } else if (turn.status === 'completed' || turn.status === 'interrupted') {
+          this.runningTurnIds.delete(chatId);
+          return thread;
+        } else if (turn.status === 'failed') {
+          this.runningTurnIds.delete(chatId);
+          throw new Error(turn.error?.message ?? 'The app-server turn failed');
+        }
+      } catch (error) {
+        if (!isAppServerConnectionClosedError(error) && !isAppServerUnavailableError(error)) {
+          throw error;
+        }
+      }
+
+      this.nudgeReconnect();
+      await sleep(Math.min(TURN_RECOVERY_POLL_MS, Math.max(100, deadline - Date.now())));
+    }
+
+    this.runningTurnIds.delete(chatId);
+    throw new Error('Lost connection to the app-server and could not recover the active turn.');
   }
 }
 

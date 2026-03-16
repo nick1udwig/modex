@@ -250,188 +250,190 @@ export const RuntimeSettingsSheet = ({
           </button>
         </div>
 
-        <div className="settings-sheet__section">
-          <span className="settings-sheet__label">Access</span>
-          <div className="settings-toggle" role="group" aria-label="Access mode">
-            <button
-              className={`settings-toggle__button ${accessMode === 'read-only' ? 'settings-toggle__button--active' : ''}`}
-              type="button"
-              onClick={() => setAccessMode('read-only')}
-            >
-              Read
-            </button>
-            <button
-              className={`settings-toggle__button ${accessMode === 'workspace-write' ? 'settings-toggle__button--active' : ''}`}
-              type="button"
-              onClick={() => setAccessMode('workspace-write')}
-            >
-              Write
-            </button>
+        <div className="settings-sheet__content">
+          <div className="settings-sheet__section">
+            <span className="settings-sheet__label">Access</span>
+            <div className="settings-toggle" role="group" aria-label="Access mode">
+              <button
+                className={`settings-toggle__button ${accessMode === 'read-only' ? 'settings-toggle__button--active' : ''}`}
+                type="button"
+                onClick={() => setAccessMode('read-only')}
+              >
+                Read
+              </button>
+              <button
+                className={`settings-toggle__button ${accessMode === 'workspace-write' ? 'settings-toggle__button--active' : ''}`}
+                type="button"
+                onClick={() => setAccessMode('workspace-write')}
+              >
+                Write
+              </button>
+            </div>
           </div>
-        </div>
 
-        <div className="settings-sheet__section">
-          <span className="settings-sheet__label">Remote paths</span>
+          <div className="settings-sheet__section">
+            <span className="settings-sheet__label">Remote paths</span>
 
-          <div className="settings-browser">
-            <div className="settings-browser__toolbar">
-              <div className="settings-browser__roots">
-                {browserRoots.map((root) => (
+            <div className="settings-browser">
+              <div className="settings-browser__toolbar">
+                <div className="settings-browser__roots">
+                  {browserRoots.map((root) => (
+                    <button
+                      key={root.path}
+                      className={`settings-browser__root ${browserPath.startsWith(root.path) ? 'settings-browser__root--active' : ''}`}
+                      type="button"
+                      onClick={() => void navigateTo(root.path)}
+                    >
+                      {root.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="settings-browser__path-row">
                   <button
-                    key={root.path}
-                    className={`settings-browser__root ${browserPath.startsWith(root.path) ? 'settings-browser__root--active' : ''}`}
+                    className="settings-browser__up"
                     type="button"
-                    onClick={() => void navigateTo(root.path)}
+                    disabled={!browserParent || browserLoading}
+                    onClick={() => {
+                      if (browserParent) {
+                        void navigateTo(browserParent);
+                      }
+                    }}
                   >
-                    {root.label}
+                    Up
                   </button>
+
+                  <div className="settings-browser__path">{browserPath || 'Connect to the sidecar to browse remote folders.'}</div>
+
+                  <button
+                    className="settings-browser__current"
+                    type="button"
+                    disabled={!browserPath}
+                    onClick={() => addRoot(browserPath)}
+                  >
+                    Add current
+                  </button>
+                </div>
+
+                <input
+                  type="text"
+                  value={browserQuery}
+                  placeholder="Search directories on the server"
+                  aria-label="Search remote directories"
+                  onChange={(event) => setBrowserQuery(event.target.value)}
+                />
+              </div>
+
+              {browserError ? <div className="settings-browser__status settings-browser__status--error">{browserError}</div> : null}
+              {!browserError && browserLoading ? <div className="settings-browser__status">Loading remote filesystem…</div> : null}
+
+              <div className="settings-browser__list">
+                {!browserLoading && visibleEntries.length === 0 ? (
+                  <div className="settings-browser__empty">
+                    {showingSearchResults ? 'No directories match that search.' : 'No directories available here.'}
+                  </div>
+                ) : null}
+
+                {visibleEntries.map((entry) => (
+                  <div key={entry.path} className="settings-browser__item">
+                    <button
+                      className="settings-browser__entry"
+                      type="button"
+                      onClick={() => void navigateTo(entry.path)}
+                    >
+                      <span className="settings-browser__entry-name">{entry.name}</span>
+                      <span className="settings-browser__entry-meta">{entry.path}</span>
+                    </button>
+
+                    <button
+                      className="settings-browser__select"
+                      type="button"
+                      onClick={() => addRoot(entry.path)}
+                      aria-label={`Add ${entry.path}`}
+                    >
+                      <Icon name="plus" size={14} />
+                    </button>
+                  </div>
                 ))}
               </div>
+            </div>
 
-              <div className="settings-browser__path-row">
-                <button
-                  className="settings-browser__up"
-                  type="button"
-                  disabled={!browserParent || browserLoading}
-                  onClick={() => {
-                    if (browserParent) {
-                      void navigateTo(browserParent);
-                    }
-                  }}
-                >
-                  Up
-                </button>
-
-                <div className="settings-browser__path">{browserPath || 'Connect to the sidecar to browse remote folders.'}</div>
-
-                <button
-                  className="settings-browser__current"
-                  type="button"
-                  disabled={!browserPath}
-                  onClick={() => addRoot(browserPath)}
-                >
-                  Add current
-                </button>
-              </div>
-
+            <div className="settings-sheet__input-row">
               <input
                 type="text"
-                value={browserQuery}
-                placeholder="Search directories on the server"
-                aria-label="Search remote directories"
-                onChange={(event) => setBrowserQuery(event.target.value)}
+                value={inputValue}
+                placeholder="/workspace/project"
+                aria-label="Add remote path"
+                onChange={(event) => setInputValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    if (inputValue.trim()) {
+                      void addManualPath();
+                    }
+                  }
+                }}
               />
-            </div>
 
-            {browserError ? <div className="settings-browser__status settings-browser__status--error">{browserError}</div> : null}
-            {!browserError && browserLoading ? <div className="settings-browser__status">Loading remote filesystem…</div> : null}
-
-            <div className="settings-browser__list">
-              {!browserLoading && visibleEntries.length === 0 ? (
-                <div className="settings-browser__empty">
-                  {showingSearchResults ? 'No directories match that search.' : 'No directories available here.'}
-                </div>
-              ) : null}
-
-              {visibleEntries.map((entry) => (
-                <div key={entry.path} className="settings-browser__item">
-                  <button
-                    className="settings-browser__entry"
-                    type="button"
-                    onClick={() => void navigateTo(entry.path)}
-                  >
-                    <span className="settings-browser__entry-name">{entry.name}</span>
-                    <span className="settings-browser__entry-meta">{entry.path}</span>
-                  </button>
-
-                  <button
-                    className="settings-browser__select"
-                    type="button"
-                    onClick={() => addRoot(entry.path)}
-                    aria-label={`Add ${entry.path}`}
-                  >
-                    <Icon name="plus" size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="settings-sheet__input-row">
-            <input
-              type="text"
-              value={inputValue}
-              placeholder="/workspace/project"
-              aria-label="Add remote path"
-              onChange={(event) => setInputValue(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
+              <button
+                className="settings-sheet__add"
+                type="button"
+                onClick={() => {
                   if (inputValue.trim()) {
                     void addManualPath();
                   }
-                }
-              }}
-            />
+                }}
+                aria-label="Add remote path"
+              >
+                Add
+              </button>
+            </div>
 
-            <button
-              className="settings-sheet__add"
-              type="button"
-              onClick={() => {
-                if (inputValue.trim()) {
-                  void addManualPath();
-                }
-              }}
-              aria-label="Add remote path"
-            >
-              Add
-            </button>
-          </div>
+            <div className="settings-roots">
+              {roots.length === 0 ? <div className="settings-roots__empty">Add at least one remote path to create the tab.</div> : null}
 
-          <div className="settings-roots">
-            {roots.length === 0 ? <div className="settings-roots__empty">Add at least one remote path to create the tab.</div> : null}
+              {roots.map((root, index) => (
+                <div key={root} className="settings-root">
+                  <button
+                    className={`settings-root__path ${index === 0 ? 'settings-root__path--cwd' : ''}`}
+                    type="button"
+                    onClick={() =>
+                      setRoots((current) => {
+                        const next = current.filter((entry) => entry !== root);
+                        return [root, ...next];
+                      })
+                    }
+                  >
+                    <span className="settings-root__badge">{index === 0 ? 'cwd' : 'root'}</span>
+                    <span>{root}</span>
+                  </button>
 
-            {roots.map((root, index) => (
-              <div key={root} className="settings-root">
-                <button
-                  className={`settings-root__path ${index === 0 ? 'settings-root__path--cwd' : ''}`}
-                  type="button"
-                  onClick={() =>
-                    setRoots((current) => {
-                      const next = current.filter((entry) => entry !== root);
-                      return [root, ...next];
-                    })
-                  }
-                >
-                  <span className="settings-root__badge">{index === 0 ? 'cwd' : 'root'}</span>
-                  <span>{root}</span>
-                </button>
-
-                <button
-                  className="settings-root__remove"
-                  type="button"
-                  onClick={() => setRoots((current) => current.filter((entry) => entry !== root))}
-                  aria-label={`Remove ${root}`}
-                >
-                  <Icon name="x" size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {suggestedRoots.length > 0 ? (
-          <div className="settings-sheet__section">
-            <span className="settings-sheet__label">Recent</span>
-            <div className="settings-recent">
-              {suggestedRoots.map((root) => (
-                <button key={root} className="settings-recent__item" type="button" onClick={() => addRoot(root)}>
-                  {root}
-                </button>
+                  <button
+                    className="settings-root__remove"
+                    type="button"
+                    onClick={() => setRoots((current) => current.filter((entry) => entry !== root))}
+                    aria-label={`Remove ${root}`}
+                  >
+                    <Icon name="x" size={14} />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
-        ) : null}
+
+          {suggestedRoots.length > 0 ? (
+            <div className="settings-sheet__section">
+              <span className="settings-sheet__label">Recent</span>
+              <div className="settings-recent">
+                {suggestedRoots.map((root) => (
+                  <button key={root} className="settings-recent__item" type="button" onClick={() => addRoot(root)}>
+                    {root}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
 
         <div className="settings-sheet__actions">
           <button className="settings-sheet__button settings-sheet__button--ghost" type="button" onClick={onClose}>

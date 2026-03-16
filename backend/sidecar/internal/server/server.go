@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"modex/backend/sidecar/internal/config"
@@ -61,12 +63,10 @@ func withGuards(logger *slog.Logger, allowedOrigins []string, authToken string) 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := strings.TrimSpace(r.Header.Get("Origin"))
-			if origin != "" && len(allowed) > 0 {
-				if _, ok := allowed[origin]; !ok {
-					logger.Warn("rejected request with disallowed origin", "origin", origin, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
-					http.Error(w, "origin not allowed", http.StatusForbidden)
-					return
-				}
+			if origin != "" && !originAllowed(origin, r.Host, allowed) {
+				logger.Warn("rejected request with disallowed origin", "origin", origin, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
 			}
 
 			if authToken != "" && !authorized(r, authToken) {
@@ -78,6 +78,57 @@ func withGuards(logger *slog.Logger, allowedOrigins []string, authToken string) 
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func originAllowed(origin string, requestHost string, allowed map[string]struct{}) bool {
+	if len(allowed) > 0 {
+		_, ok := allowed[origin]
+		return ok
+	}
+
+	originURL, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+
+	originHost := normalizeHost(originURL.Hostname())
+	targetHost := normalizeHost(hostnameFromRequestHost(requestHost))
+	if originHost == "" || targetHost == "" {
+		return false
+	}
+
+	if originHost == targetHost {
+		return true
+	}
+
+	return isLoopbackHost(originHost) && isLoopbackHost(targetHost)
+}
+
+func hostnameFromRequestHost(host string) string {
+	trimmed := strings.TrimSpace(host)
+	if trimmed == "" {
+		return ""
+	}
+
+	parsedHost, _, err := net.SplitHostPort(trimmed)
+	if err == nil {
+		return parsedHost
+	}
+
+	return trimmed
+}
+
+func normalizeHost(host string) string {
+	return strings.Trim(strings.ToLower(strings.TrimSpace(host)), "[]")
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func authorized(r *http.Request, authToken string) bool {

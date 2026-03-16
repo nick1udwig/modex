@@ -19,6 +19,7 @@ npm run dev
 Environment:
 
 ```bash
+# Optional: defaults to ws(s)://<current-browser-host>:4222
 VITE_CODEX_APP_SERVER_URL=ws://127.0.0.1:4222
 # Optional:
 # VITE_CODEX_APP_SERVER_CWD=/path/on/vps
@@ -26,16 +27,20 @@ VITE_CODEX_APP_SERVER_URL=ws://127.0.0.1:4222
 # VITE_CODEX_APP_SERVER_MODEL_PROVIDER=openai
 # VITE_CODEX_APP_SERVER_SANDBOX=workspace-write
 # VITE_CODEX_APP_SERVER_APPROVAL_POLICY=never
+# Optional: defaults to ws(s)://<current-browser-host>:4230
 # VITE_MODEX_SIDECAR_URL=ws://127.0.0.1:4230
 # VITE_MODEX_SIDECAR_TOKEN=
 ```
 
 Notes:
 
+- Start Codex with a WebSocket listener, for example `codex app-server --listen ws://0.0.0.0:4222`.
 - `VITE_CODEX_APP_SERVER_URL` should be `wss://...` in production.
+- If `VITE_CODEX_APP_SERVER_URL` is unset, the frontend defaults to the current browser hostname on port `4222`.
 - The frontend defaults `VITE_CODEX_APP_SERVER_APPROVAL_POLICY` to `never` because this UI does not yet implement app-server approval prompts.
-- The frontend defaults `VITE_MODEX_SIDECAR_URL` to `ws://127.0.0.1:4230`.
-- For sidecar auth without rebuilding, the app also accepts `?sidecarToken=...` / `?sidecarUrl=...` query params or `localStorage` keys `modex.sidecar.token` / `modex.sidecar.url`.
+- If `VITE_MODEX_SIDECAR_URL` is unset, the frontend defaults to the current browser hostname on port `4230`.
+- The app also accepts `?appServerUrl=...` / `?sidecarUrl=...` query params or `localStorage` keys `modex.appServer.url` / `modex.sidecar.url` without rebuilding.
+- For sidecar auth without rebuilding, the app accepts `?sidecarToken=...` or the `modex.sidecar.token` localStorage key.
 
 Build for production:
 
@@ -53,6 +58,7 @@ The repo now also contains `modex-sidecar`, a Go WebSocket service for capabilit
 Run it with:
 
 ```bash
+codex app-server --listen ws://0.0.0.0:4222
 cd backend/sidecar
 go run ./cmd/modex-sidecar
 ```

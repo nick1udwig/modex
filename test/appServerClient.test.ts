@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   flattenUserInputs,
+  isAppServerConnectionClosedError,
   mapThread,
   mapThreadSummary,
   shouldResumeAfterTurnStartError,
@@ -137,4 +138,10 @@ test('shouldResumeAfterTurnStartError only retries unloaded threads', () => {
   assert.equal(shouldResumeAfterTurnStartError(new Error('thread not found: thr_123')), true);
   assert.equal(shouldResumeAfterTurnStartError(new Error('no rollout found for thread id thr_123')), false);
   assert.equal(shouldResumeAfterTurnStartError(new Error('Timed out waiting for the app-server to finish the turn')), false);
+});
+
+test('isAppServerConnectionClosedError only matches established websocket disconnects', () => {
+  assert.equal(isAppServerConnectionClosedError(new Error('App-server connection closed: ws://localhost:4222')), true);
+  assert.equal(isAppServerConnectionClosedError(new Error('Unable to connect to app-server at ws://localhost:4222')), false);
+  assert.equal(isAppServerConnectionClosedError(new Error('The app-server turn failed')), false);
 });

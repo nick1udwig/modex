@@ -34,6 +34,7 @@ const browserWindow = typeof window === 'undefined' ? null : (window as Window &
 
 const audioContextConstructor: AudioContextCtor | undefined =
   typeof AudioContext !== 'undefined' ? AudioContext : browserWindow?.webkitAudioContext;
+const PREFERRED_AUDIO_CONTEXT_SAMPLE_RATE = 24_000;
 
 const composeTranscript = (order: string[], items: Map<string, string>) => {
   const seen = new Set<string>();
@@ -65,6 +66,20 @@ const insertCommittedItem = (order: string[], itemId: string, previousItemId?: s
   }
 
   order.push(itemId);
+};
+
+const createRecordingAudioContext = () => {
+  if (!audioContextConstructor) {
+    throw new Error('Voice transcription is not available in this browser.');
+  }
+
+  try {
+    return new audioContextConstructor({
+      sampleRate: PREFERRED_AUDIO_CONTEXT_SAMPLE_RATE,
+    });
+  } catch {
+    return new audioContextConstructor();
+  }
 };
 
 export const useRealtimeTranscription = () => {
@@ -197,9 +212,7 @@ export const useRealtimeTranscription = () => {
         setSession(null);
       });
 
-      const audioContext = new audioContextConstructor({
-        sampleRate: 24_000,
-      });
+      const audioContext = createRecordingAudioContext();
       audioContextRef.current = audioContext;
       await audioContext.resume();
 

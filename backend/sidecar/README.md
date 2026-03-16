@@ -90,6 +90,7 @@ The sidecar automatically loads `.env.local` and `.env` if present. It checks th
 ## Run
 
 ```bash
+codex app-server --listen ws://0.0.0.0:4222
 cd backend/sidecar
 go run ./cmd/modex-sidecar
 ```
@@ -97,6 +98,7 @@ go run ./cmd/modex-sidecar
 ## Notes
 
 - The filesystem endpoint only supports browsing/searching the filesystem visible to the sidecar host.
+- If `MODEX_SIDECAR_ALLOWED_ORIGINS` is unset, the sidecar accepts browser origins from the same hostname as the request target, plus loopback aliases for local development.
 - If `MODEX_FS_ROOTS` is set, all list/stat/search requests are constrained to those roots after symlink resolution.
 - If `MODEX_SIDECAR_AUTH_TOKEN` is set, clients must provide it as `?token=...` or `Authorization: Bearer ...`.
 - `MODEX_SIDECAR_LOG_LEVEL` defaults to `warn`. Supported values are `debug`, `info`, `warn`, and `error`.

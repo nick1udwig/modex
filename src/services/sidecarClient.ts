@@ -1,4 +1,4 @@
-const DEFAULT_SIDECAR_URL = 'ws://127.0.0.1:4230';
+import { buildDefaultWebSocketUrl, readRuntimeOverride } from './runtimeConfig';
 
 export interface RemoteDirectoryRoot {
   label: string;
@@ -73,23 +73,6 @@ interface SidecarConfig {
   url: string;
 }
 
-const readRuntimeOverride = (queryKey: string, storageKey: string) => {
-  if (typeof window === 'undefined') {
-    return undefined;
-  }
-
-  const queryValue = new URLSearchParams(window.location.search).get(queryKey)?.trim();
-  if (queryValue) {
-    return queryValue;
-  }
-
-  try {
-    return window.localStorage.getItem(storageKey)?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-};
-
 const sidecarConfig = (): SidecarConfig => ({
   token:
     readRuntimeOverride('sidecarToken', 'modex.sidecar.token') ??
@@ -98,7 +81,7 @@ const sidecarConfig = (): SidecarConfig => ({
   url:
     readRuntimeOverride('sidecarUrl', 'modex.sidecar.url') ??
     import.meta.env.VITE_MODEX_SIDECAR_URL?.trim() ??
-    DEFAULT_SIDECAR_URL,
+    buildDefaultWebSocketUrl(4230),
 });
 
 const normalizeSidecarUrl = (rawUrl: string) => {
