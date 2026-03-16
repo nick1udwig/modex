@@ -1,17 +1,23 @@
 import type {
   AccessMode,
+  ActivityEntry,
+  ActivityStatus,
+  ApprovalDecision,
+  ApprovalRequest,
   ChatRuntimeSettings,
   ChatStatus,
   ChatSummary,
   ChatThread,
   CreateChatPayload,
+  JsonRpcId,
   Message,
   RemoteAppClient,
   RemoteThreadEvent,
   SendMessagePayload,
+  UserInputRequest,
 } from '../app/types';
+import { buildDefaultWebSocketUrl, readRuntimeOverride } from './runtimeConfig';
 
-const DEFAULT_APP_SERVER_URL = 'ws://127.0.0.1:4222';
 const DEFAULT_SOURCE_KINDS = ['cli', 'vscode', 'appServer'] as const;
 const NOTIFICATION_OPTOUTS = [
   'item/plan/delta',
@@ -46,6 +52,12 @@ interface JsonRpcResponse<T> {
 }
 
 interface JsonRpcNotification {
+  method: string;
+  params?: unknown;
+}
+
+interface JsonRpcServerRequest {
+  id: JsonRpcId;
   method: string;
   params?: unknown;
 }
@@ -113,6 +125,36 @@ type RawThreadItem =
     }
   | {
       id: string;
+      text: string;
+      type: 'plan';
+    }
+  | {
+      content?: string[] | null;
+      id: string;
+      summary?: string[] | null;
+      type: 'reasoning';
+    }
+  | {
+      aggregatedOutput?: string | null;
+      command?: string | null;
+      cwd?: string | null;
+      exitCode?: number | null;
+      id: string;
+      status?: 'completed' | 'declined' | 'failed' | 'inProgress' | null;
+      type: 'commandExecution';
+    }
+  | {
+      changes?: Array<{
+        diff?: string | null;
+        kind?: string | null;
+        path?: string | null;
+      }> | null;
+      id: string;
+      status?: 'completed' | 'declined' | 'failed' | 'inProgress' | null;
+      type: 'fileChange';
+    }
+  | {
+      id: string;
       type: string;
     };
 
@@ -165,6 +207,11 @@ interface RawTurnCompletedNotification {
   turn: RawTurn;
 }
 
+interface RawTurnStartedNotification {
+  threadId: string;
+  turn: RawTurn;
+}
+
 interface RawErrorNotification {
   error: {
     message: string;
@@ -187,19 +234,154 @@ interface RawAgentMessageDeltaNotification {
   turnId: string;
 }
 
+type RawCommandExecutionApprovalDecision =
+  | 'accept'
+  | 'acceptForSession'
+  | 'decline'
+  | 'cancel'
+  | { acceptWithExecpolicyAmendment: unknown }
+  | { applyNetworkPolicyAmendment: unknown };
+
+interface RawAdditionalPermissionProfile {
+  fileSystem?: {
+    read?: string[] | null;
+    write?: string[] | null;
+  } | null;
+  network?: {
+    enabled?: boolean | null;
+  } | null;
+  macos?: unknown;
+}
+
+interface RawCommandExecutionRequestApprovalParams {
+  additionalPermissions?: RawAdditionalPermissionProfile | null;
+  approvalId?: string | null;
+  availableDecisions?: RawCommandExecutionApprovalDecision[] | null;
+  command?: string | null;
+  cwd?: string | null;
+  itemId: string;
+  reason?: string | null;
+  threadId: string;
+  turnId: string;
+}
+
+interface RawFileChangeRequestApprovalParams {
+  grantRoot?: string | null;
+  itemId: string;
+  reason?: string | null;
+  threadId: string;
+  turnId: string;
+}
+
+interface RawPermissionsRequestApprovalParams {
+  itemId: string;
+  permissions: RawAdditionalPermissionProfile;
+  reason: string | null;
+  threadId: string;
+  turnId: string;
+}
+
+interface RawToolRequestUserInputParams {
+  itemId: string;
+  questions: Array<{
+    header: string;
+    id: string;
+    isOther: boolean;
+    isSecret: boolean;
+    options: Array<{
+      description: string;
+      label: string;
+    }> | null;
+    question: string;
+  }>;
+  threadId: string;
+  turnId: string;
+}
+
+interface RawLegacyExecCommandApprovalParams {
+  approvalId: string | null;
+  callId: string;
+  command: string[];
+  conversationId: string;
+  cwd: string;
+  reason: string | null;
+}
+
+interface RawLegacyApplyPatchApprovalParams {
+  callId: string;
+  conversationId: string;
+  grantRoot: string | null;
+  reason: string | null;
+}
+
+type PendingServerRequest =
+  | {
+      kind: 'command-approval';
+      requestId: JsonRpcId;
+      chatId: string;
+      negativeDecision: 'cancel' | 'decline';
+    }
+  | {
+      kind: 'file-change-approval';
+      requestId: JsonRpcId;
+      chatId: string;
+      negativeDecision: 'cancel' | 'decline';
+    }
+  | {
+      kind: 'permissions-approval';
+      requestId: JsonRpcId;
+      chatId: string;
+      permissions: RawAdditionalPermissionProfile;
+    }
+  | {
+      kind: 'legacy-command-approval';
+      requestId: JsonRpcId;
+      chatId: string;
+      negativeDecision: 'abort' | 'denied';
+    }
+  | {
+      kind: 'legacy-apply-patch-approval';
+      requestId: JsonRpcId;
+      chatId: string;
+      negativeDecision: 'abort' | 'denied';
+    }
+  | {
+      kind: 'user-input';
+      requestId: JsonRpcId;
+      chatId: string;
+    };
+
 const appServerConfig = (): AppServerConfig => ({
   approvalPolicy:
     (import.meta.env.VITE_CODEX_APP_SERVER_APPROVAL_POLICY as
       | AppServerConfig['approvalPolicy']
-      | undefined) ?? 'never',
+      | undefined) ?? 'on-request',
   cwd: import.meta.env.VITE_CODEX_APP_SERVER_CWD?.trim() || undefined,
   model: import.meta.env.VITE_CODEX_APP_SERVER_MODEL?.trim() || undefined,
   modelProvider: import.meta.env.VITE_CODEX_APP_SERVER_MODEL_PROVIDER?.trim() || undefined,
   sandbox:
     (import.meta.env.VITE_CODEX_APP_SERVER_SANDBOX as AppServerConfig['sandbox'] | undefined) ??
     undefined,
-  url: import.meta.env.VITE_CODEX_APP_SERVER_URL?.trim() || DEFAULT_APP_SERVER_URL,
+  url:
+    readRuntimeOverride('appServerUrl', 'modex.appServer.url') ??
+    import.meta.env.VITE_CODEX_APP_SERVER_URL?.trim() ??
+    buildDefaultWebSocketUrl({ path: '/app-server' }),
 });
+
+export const buildInitializeParams = () => ({
+  capabilities: {
+    experimentalApi: true,
+    optOutNotificationMethods: [...NOTIFICATION_OPTOUTS],
+  },
+  clientInfo: {
+    name: 'modex_web',
+    title: 'Modex Web',
+    version: '0.1.0',
+  },
+});
+
+export const isAppServerConnectionClosedError = (error: unknown) =>
+  error instanceof Error && error.message.startsWith('App-server connection closed:');
 
 const omitUndefined = <T extends Record<string, unknown>>(value: T) =>
   Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
@@ -331,9 +513,6 @@ const compactPreview = (text: string) => compactSummaryText(text) || 'Start a ne
 export const shouldResumeAfterTurnStartError = (error: unknown) =>
   error instanceof Error && error.message.includes('thread not found:');
 
-export const isAppServerConnectionClosedError = (error: unknown) =>
-  error instanceof Error && error.message.startsWith('App-server connection closed:');
-
 const isAppServerUnavailableError = (error: unknown) =>
   error instanceof Error && error.message.startsWith('Unable to connect to app-server at ');
 
@@ -341,6 +520,138 @@ const sleep = (durationMs: number) =>
   new Promise<void>((resolve) => {
     globalThis.setTimeout(resolve, durationMs);
   });
+
+const detailLine = (label: string, value: string | null | undefined) => {
+  const text = value?.trim();
+  return text ? `${label}: ${text}` : null;
+};
+
+const permissionDetailLines = (permissions: RawAdditionalPermissionProfile | null | undefined) => {
+  if (!permissions) {
+    return [];
+  }
+
+  const lines: string[] = [];
+  if (permissions.fileSystem?.write?.length) {
+    lines.push(`Writable roots: ${permissions.fileSystem.write.join(', ')}`);
+  }
+  if (permissions.fileSystem?.read?.length) {
+    lines.push(`Readable roots: ${permissions.fileSystem.read.join(', ')}`);
+  }
+  if (permissions.network?.enabled) {
+    lines.push('Network access requested');
+  }
+  if (permissions.macos) {
+    lines.push('Additional macOS permissions requested');
+  }
+  return lines;
+};
+
+const allowsSessionDecision = (availableDecisions: RawCommandExecutionApprovalDecision[] | null | undefined) =>
+  !availableDecisions || availableDecisions.some((decision) => decision === 'acceptForSession');
+
+const negativeDecision = (
+  availableDecisions: RawCommandExecutionApprovalDecision[] | null | undefined,
+): 'cancel' | 'decline' =>
+  availableDecisions?.some((decision) => decision === 'decline') ? 'decline' : 'cancel';
+
+const buildCommandApprovalRequest = (
+  requestId: JsonRpcId,
+  params: RawCommandExecutionRequestApprovalParams,
+): ApprovalRequest => ({
+  allowSessionDecision: allowsSessionDecision(params.availableDecisions),
+  chatId: params.threadId,
+  detailLines: [
+    detailLine('Command', params.command),
+    detailLine('Directory', params.cwd),
+    ...permissionDetailLines(params.additionalPermissions),
+  ].flatMap((line) => (line ? [line] : [])),
+  kind: 'approval',
+  message: params.reason?.trim() || 'Codex wants to run a command.',
+  requestId,
+  title: 'Command approval',
+  turnId: params.turnId,
+});
+
+const buildFileChangeApprovalRequest = (
+  requestId: JsonRpcId,
+  params: RawFileChangeRequestApprovalParams,
+): ApprovalRequest => ({
+  allowSessionDecision: true,
+  chatId: params.threadId,
+  detailLines: [detailLine('Writable root', params.grantRoot)].flatMap((line) => (line ? [line] : [])),
+  kind: 'approval',
+  message: params.reason?.trim() || 'Codex wants permission to apply file changes.',
+  requestId,
+  title: 'File change approval',
+  turnId: params.turnId,
+});
+
+const buildPermissionsApprovalRequest = (
+  requestId: JsonRpcId,
+  params: RawPermissionsRequestApprovalParams,
+): ApprovalRequest => ({
+  allowSessionDecision: true,
+  chatId: params.threadId,
+  detailLines: permissionDetailLines(params.permissions),
+  kind: 'approval',
+  message: params.reason?.trim() || 'Codex wants additional permissions.',
+  requestId,
+  title: 'Permissions approval',
+  turnId: params.turnId,
+});
+
+const buildLegacyExecApprovalRequest = (
+  requestId: JsonRpcId,
+  params: RawLegacyExecCommandApprovalParams,
+  fallbackTurnId: string | undefined,
+): ApprovalRequest => ({
+  allowSessionDecision: true,
+  chatId: params.conversationId,
+  detailLines: [
+    params.command.length > 0 ? `Command: ${params.command.join(' ')}` : null,
+    detailLine('Directory', params.cwd),
+  ].flatMap((line) => (line ? [line] : [])),
+  kind: 'approval',
+  message: params.reason?.trim() || 'Codex wants to run a command.',
+  requestId,
+  title: 'Command approval',
+  turnId: fallbackTurnId ?? params.callId,
+});
+
+const buildLegacyApplyPatchApprovalRequest = (
+  requestId: JsonRpcId,
+  params: RawLegacyApplyPatchApprovalParams,
+  fallbackTurnId: string | undefined,
+): ApprovalRequest => ({
+  allowSessionDecision: true,
+  chatId: params.conversationId,
+  detailLines: [detailLine('Writable root', params.grantRoot)].flatMap((line) => (line ? [line] : [])),
+  kind: 'approval',
+  message: params.reason?.trim() || 'Codex wants permission to apply file changes.',
+  requestId,
+  title: 'File change approval',
+  turnId: fallbackTurnId ?? params.callId,
+});
+
+const buildUserInputRequest = (
+  requestId: JsonRpcId,
+  params: RawToolRequestUserInputParams,
+): UserInputRequest => ({
+  chatId: params.threadId,
+  kind: 'user-input',
+  questions: params.questions.map((question) => ({
+    header: question.header,
+    id: question.id,
+    isOther: question.isOther,
+    isSecret: question.isSecret,
+    options: question.options ?? [],
+    question: question.question,
+  })),
+  requestId,
+  title: 'More input needed',
+  turnId: params.turnId,
+});
 
 const normalizeStatus = (status: RawThreadStatus): ChatStatus => (status.type === 'active' ? 'running' : 'idle');
 
@@ -356,6 +667,141 @@ const isVisibleAgentMessageItem = (
   item: RawThreadItem,
 ): item is Extract<RawThreadItem, { type: 'agentMessage' }> =>
   isAgentMessageItem(item) && item.phase !== 'commentary';
+
+const isPlanItem = (item: RawThreadItem): item is Extract<RawThreadItem, { type: 'plan' }> =>
+  item.type === 'plan' && 'text' in item;
+
+const isReasoningItem = (item: RawThreadItem): item is Extract<RawThreadItem, { type: 'reasoning' }> =>
+  item.type === 'reasoning' && ('summary' in item || 'content' in item);
+
+const isCommandExecutionItem = (
+  item: RawThreadItem,
+): item is Extract<RawThreadItem, { type: 'commandExecution' }> => item.type === 'commandExecution' && 'command' in item;
+
+const isFileChangeItem = (item: RawThreadItem): item is Extract<RawThreadItem, { type: 'fileChange' }> =>
+  item.type === 'fileChange' && 'changes' in item;
+
+const normalizeActivityStatus = (
+  status: 'completed' | 'declined' | 'failed' | 'inProgress' | null | undefined,
+): ActivityStatus => {
+  if (status === 'failed' || status === 'declined') {
+    return 'failed';
+  }
+
+  if (status === 'inProgress') {
+    return 'in-progress';
+  }
+
+  return 'completed';
+};
+
+const mapThreadActivity = (thread: RawThread): ActivityEntry[] =>
+  thread.turns.flatMap((turn) =>
+    turn.items.flatMap<ActivityEntry>((item) => {
+      if (isPlanItem(item)) {
+        const detail = item.text.trim();
+        if (!detail) {
+          return [];
+        }
+
+        return [
+          {
+            detail,
+            id: item.id,
+            kind: 'plan',
+            status: 'completed',
+            summary: compactPreview(detail),
+            title: 'Plan',
+            turnId: turn.id,
+          } satisfies ActivityEntry,
+        ];
+      }
+
+      if (isReasoningItem(item)) {
+        const sections = [...(item.summary ?? []), ...(item.content ?? [])]
+          .map((section) => section.trim())
+          .filter((section) => section.length > 0);
+
+        if (sections.length === 0) {
+          return [];
+        }
+
+        return [
+          {
+            detail: sections.join('\n\n'),
+            id: item.id,
+            kind: 'reasoning',
+            status: 'completed',
+            summary: compactPreview(sections[0]),
+            title: 'Reasoning',
+            turnId: turn.id,
+          } satisfies ActivityEntry,
+        ];
+      }
+
+      if (isCommandExecutionItem(item)) {
+        const command = item.command?.trim() ?? '';
+        const cwd = item.cwd?.trim() ?? '';
+        const output = item.aggregatedOutput?.trim() ?? '';
+        const detailLines = [
+          command ? `Command: ${command}` : null,
+          cwd ? `Directory: ${cwd}` : null,
+          item.exitCode === null || item.exitCode === undefined ? null : `Exit code: ${item.exitCode}`,
+          output.length > 0 ? '' : null,
+          output.length > 0 ? output : null,
+        ].filter((line): line is string => line !== null);
+
+        return [
+          {
+            detail: detailLines.join('\n'),
+            id: item.id,
+            kind: 'command',
+            status: normalizeActivityStatus(item.status),
+            summary: compactPreview(command || output || 'Shell command'),
+            title: command || 'Shell command',
+            turnId: turn.id,
+          } satisfies ActivityEntry,
+        ];
+      }
+
+      if (isFileChangeItem(item)) {
+        const changes = (item.changes ?? [])
+          .map((change) => {
+            const path = change.path?.trim() ?? '';
+            const kind = change.kind?.trim() ?? '';
+            const diff = change.diff?.trim() ?? '';
+            if (!path) {
+              return null;
+            }
+
+            return `${kind ? `${kind}: ` : ''}${path}${diff ? `\n${diff}` : ''}`;
+          })
+          .filter((entry): entry is string => Boolean(entry));
+
+        if (changes.length === 0) {
+          return [];
+        }
+
+        const fileList = (item.changes ?? [])
+          .map((change) => change.path?.trim() ?? '')
+          .filter((path): path is string => path.length > 0);
+
+        return [
+          {
+            detail: changes.join('\n\n'),
+            id: item.id,
+            kind: 'file-change',
+            status: normalizeActivityStatus(item.status),
+            summary: compactPreview(fileList.join(', ')),
+            title: fileList.length > 1 ? 'File changes' : fileList[0] ?? 'File change',
+            turnId: turn.id,
+          } satisfies ActivityEntry,
+        ];
+      }
+
+      return [];
+    }),
+  );
 
 const formatTokenUsageLabel = (totalTokens: number | null | undefined) => {
   if (!totalTokens || totalTokens <= 0) {
@@ -468,6 +914,7 @@ export const mapThreadMessages = (thread: RawThread): Message[] => {
           createdAt: messageTimestamp(thread.createdAt, offset),
           id: item.id,
           role: 'user',
+          turnId: turn.id,
         });
         offset += 1;
         continue;
@@ -484,6 +931,7 @@ export const mapThreadMessages = (thread: RawThread): Message[] => {
           createdAt: messageTimestamp(thread.createdAt, offset),
           id: item.id,
           role: 'assistant',
+          turnId: turn.id,
         });
         offset += 1;
       }
@@ -494,6 +942,7 @@ export const mapThreadMessages = (thread: RawThread): Message[] => {
 };
 
 export const mapThread = (thread: RawThread): ChatThread => ({
+  activity: mapThreadActivity(thread),
   ...mapThreadSummary(thread),
   cwd: thread.cwd,
   messages: mapThreadMessages(thread),
@@ -502,6 +951,7 @@ export const mapThread = (thread: RawThread): ChatThread => ({
 
 type NotificationHandler = (notification: JsonRpcNotification) => void;
 type CloseHandler = (reason: Error) => void;
+type ServerRequestHandler = (request: JsonRpcServerRequest) => boolean;
 
 class AppServerConnection {
   private readonly socket: WebSocket;
@@ -509,6 +959,7 @@ class AppServerConnection {
   private closeHandlers = new Set<CloseHandler>();
   private nextRequestId = 1;
   private notificationHandlers = new Set<NotificationHandler>();
+  private serverRequestHandlers = new Set<ServerRequestHandler>();
   private pending = new Map<
     number,
     {
@@ -564,16 +1015,7 @@ class AppServerConnection {
     });
 
     const connection = new AppServerConnection(socket, config.url);
-    await connection.request('initialize', {
-      capabilities: {
-        optOutNotificationMethods: [...NOTIFICATION_OPTOUTS],
-      },
-      clientInfo: {
-        name: 'modex_web',
-        title: 'Modex Web',
-        version: '0.1.0',
-      },
-    });
+    await connection.request('initialize', buildInitializeParams());
     connection.notify('initialized');
     return connection;
   }
@@ -598,6 +1040,13 @@ class AppServerConnection {
     };
   }
 
+  onServerRequest(handler: ServerRequestHandler) {
+    this.serverRequestHandlers.add(handler);
+    return () => {
+      this.serverRequestHandlers.delete(handler);
+    };
+  }
+
   notify(method: string, params?: unknown) {
     this.socket.send(JSON.stringify(params === undefined ? { method } : { method, params }));
   }
@@ -616,6 +1065,22 @@ class AppServerConnection {
     });
   }
 
+  respond(id: JsonRpcId, result: unknown) {
+    this.socket.send(JSON.stringify({ id, result }));
+  }
+
+  respondError(id: JsonRpcId, message: string, code = -32000) {
+    this.socket.send(
+      JSON.stringify({
+        error: {
+          code,
+          message,
+        },
+        id,
+      }),
+    );
+  }
+
   async waitForTurnCompletion(threadId: string, turnId: string) {
     return await new Promise<void>((resolve, reject) => {
       const timeoutId = window.setTimeout(() => {
@@ -629,17 +1094,6 @@ class AppServerConnection {
           if (params?.threadId !== threadId || params.status.type !== 'active') {
             return;
           }
-
-          if (params.status.activeFlags?.includes('waitingOnApproval')) {
-            cleanup();
-            reject(new Error('Thread is waiting on approval, which this UI does not support yet'));
-          }
-
-          if (params.status.activeFlags?.includes('waitingOnUserInput')) {
-            cleanup();
-            reject(new Error('Thread is waiting on extra user input, which this UI does not support yet'));
-          }
-
           return;
         }
 
@@ -669,7 +1123,7 @@ class AppServerConnection {
 
         if (params.turn.status === 'interrupted') {
           cleanup();
-          reject(new Error('The app-server turn was interrupted'));
+          resolve();
           return;
         }
 
@@ -691,9 +1145,22 @@ class AppServerConnection {
   }
 
   private handleMessage(raw: string) {
-    const parsed = JSON.parse(raw) as JsonRpcNotification | JsonRpcResponse<unknown>;
+    const parsed = JSON.parse(raw) as JsonRpcNotification | JsonRpcServerRequest | JsonRpcResponse<unknown>;
 
     if ('method' in parsed) {
+      if ('id' in parsed) {
+        let handled = false;
+
+        for (const handler of this.serverRequestHandlers) {
+          handled = handler(parsed) || handled;
+        }
+
+        if (!handled) {
+          this.respondError(parsed.id, `Unsupported app-server request: ${parsed.method}`, -32601);
+        }
+        return;
+      }
+
       for (const handler of this.notificationHandlers) {
         handler(parsed);
       }
@@ -729,13 +1196,14 @@ export class AppServerClient implements RemoteAppClient {
   private connection: AppServerConnection | null = null;
   private connectionPromise: Promise<AppServerConnection> | null = null;
   private listeners = new Set<(event: RemoteThreadEvent) => void>();
+  private pendingServerRequests = new Map<JsonRpcId, PendingServerRequest>();
   private reconnectAttempt = 0;
-  private reconnectSignalsBound = false;
   private reconnectTimerId: ReturnType<typeof globalThis.setTimeout> | null = null;
   private refreshingThreadIds = new Set<string>();
   private runningTurnIds = new Map<string, string>();
   private summaryCache = new Map<string, ChatSummary>();
   private threadCache = new Map<string, ChatThread>();
+  private reconnectSignalsBound = false;
   private readonly handleVisibilityChange = () => {
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
       return;
@@ -788,14 +1256,8 @@ export class AppServerClient implements RemoteAppClient {
   }
 
   async getChat(chatId: string) {
-    const connection = await this.ensureConnection();
-    const response = await connection.request<RawThreadReadResponse>('thread/read', {
-      includeTurns: true,
-      threadId: chatId,
-    });
-
-    const thread = this.mergeThread(mapThread(response.thread));
-    this.storeThread(thread);
+    const rawThread = await this.readRawThread(chatId);
+    const thread = this.storeMappedThread(rawThread);
     return thread;
   }
 
@@ -849,16 +1311,95 @@ export class AppServerClient implements RemoteAppClient {
     this.runningTurnIds.set(payload.chatId, started.turn.id);
     try {
       await connection.waitForTurnCompletion(payload.chatId, started.turn.id);
-      this.runningTurnIds.delete(payload.chatId);
       return await this.getChat(payload.chatId);
     } catch (error) {
       if (!isAppServerConnectionClosedError(error)) {
-        this.runningTurnIds.delete(payload.chatId);
         throw error;
       }
 
       return await this.recoverTurnAfterDisconnect(payload.chatId, started.turn.id);
     }
+  }
+
+  async interruptTurn(chatId: string) {
+    const connection = await this.ensureConnection();
+    const turnId = this.runningTurnIds.get(chatId);
+    if (!turnId) {
+      throw new Error('No active run to stop.');
+    }
+
+    await connection.request<Record<string, never>>('turn/interrupt', {
+      threadId: chatId,
+      turnId,
+    });
+    this.clearPendingRequestsForChat(chatId);
+  }
+
+  async respondToApproval(request: ApprovalRequest, decision: ApprovalDecision) {
+    const connection = await this.ensureConnection();
+    const pending = this.pendingServerRequests.get(request.requestId);
+    if (!pending) {
+      throw new Error('That approval request is no longer active.');
+    }
+
+    switch (pending.kind) {
+      case 'command-approval':
+      case 'file-change-approval':
+        connection.respond(request.requestId, {
+          decision: decision === 'decline' ? pending.negativeDecision : decision,
+        });
+        break;
+
+      case 'legacy-command-approval':
+      case 'legacy-apply-patch-approval':
+        connection.respond(request.requestId, {
+          decision:
+            decision === 'accept'
+              ? 'approved'
+              : decision === 'acceptForSession'
+                ? 'approved_for_session'
+                : pending.negativeDecision,
+        });
+        break;
+
+      case 'permissions-approval':
+        if (decision === 'decline') {
+          connection.respondError(request.requestId, 'User declined additional permissions.', 4001);
+          break;
+        }
+
+        connection.respond(request.requestId, {
+          permissions: pending.permissions,
+          scope: decision === 'acceptForSession' ? 'session' : 'turn',
+        });
+        break;
+
+      case 'user-input':
+        throw new Error('That request needs input, not an approval decision.');
+    }
+
+    this.pendingServerRequests.delete(request.requestId);
+    this.emit({
+      chatId: request.chatId,
+      type: 'interaction-cleared',
+    });
+  }
+
+  async submitUserInput(request: UserInputRequest, answers: Record<string, string[]>) {
+    const connection = await this.ensureConnection();
+    const pending = this.pendingServerRequests.get(request.requestId);
+    if (!pending || pending.kind !== 'user-input') {
+      throw new Error('That input request is no longer active.');
+    }
+
+    connection.respond(request.requestId, {
+      answers,
+    });
+    this.pendingServerRequests.delete(request.requestId);
+    this.emit({
+      chatId: request.chatId,
+      type: 'interaction-cleared',
+    });
   }
 
   private emit(event: RemoteThreadEvent) {
@@ -882,12 +1423,15 @@ export class AppServerClient implements RemoteAppClient {
           this.handleNotification(notification);
         });
 
-        connection.onClose(() => {
+        connection.onServerRequest((request) => this.handleServerRequest(request));
+
+        connection.onClose((error) => {
           if (this.connection === connection) {
             this.connection = null;
             this.connectionPromise = null;
           }
 
+          this.pendingServerRequests.clear();
           this.scheduleReconnect();
         });
 
@@ -979,7 +1523,7 @@ export class AppServerClient implements RemoteAppClient {
       }
 
       case 'turn/started': {
-        const params = notification.params as { threadId: string; turn: RawTurn } | undefined;
+        const params = notification.params as RawTurnStartedNotification | undefined;
         if (!params) {
           return;
         }
@@ -997,6 +1541,7 @@ export class AppServerClient implements RemoteAppClient {
         const status = normalizeStatus(params.status);
         if (params.status.type !== 'active') {
           this.runningTurnIds.delete(params.threadId);
+          this.clearPendingRequestsForChat(params.threadId);
         }
         const cachedSummary = this.summaryCache.get(params.threadId);
         if (cachedSummary) {
@@ -1083,7 +1628,7 @@ export class AppServerClient implements RemoteAppClient {
           return;
         }
 
-        const message = this.mapLiveMessage(params.item);
+        const message = this.mapLiveMessage(params.item, params.turnId);
         if (!message) {
           return;
         }
@@ -1117,7 +1662,7 @@ export class AppServerClient implements RemoteAppClient {
           return;
         }
 
-        const message = this.mapLiveMessage(params.item);
+        const message = this.mapLiveMessage(params.item, params.turnId);
         if (!message) {
           return;
         }
@@ -1137,6 +1682,7 @@ export class AppServerClient implements RemoteAppClient {
         }
 
         this.runningTurnIds.delete(params.threadId);
+        this.clearPendingRequestsForChat(params.threadId);
 
         if (params.turn.status === 'failed') {
           this.emit({
@@ -1169,7 +1715,141 @@ export class AppServerClient implements RemoteAppClient {
     }
   }
 
-  private mapLiveMessage(item: RawThreadItem): Message | null {
+  private handleServerRequest(request: JsonRpcServerRequest) {
+    switch (request.method) {
+      case 'item/commandExecution/requestApproval': {
+        const params = request.params as RawCommandExecutionRequestApprovalParams | undefined;
+        if (!params) {
+          this.connection?.respondError(request.id, 'Missing approval request params.');
+          return true;
+        }
+
+        this.pendingServerRequests.set(request.id, {
+          chatId: params.threadId,
+          kind: 'command-approval',
+          negativeDecision: negativeDecision(params.availableDecisions),
+          requestId: request.id,
+        });
+        this.emit({
+          request: buildCommandApprovalRequest(request.id, params),
+          type: 'interaction-request',
+        });
+        return true;
+      }
+
+      case 'item/fileChange/requestApproval': {
+        const params = request.params as RawFileChangeRequestApprovalParams | undefined;
+        if (!params) {
+          this.connection?.respondError(request.id, 'Missing file approval request params.');
+          return true;
+        }
+
+        this.pendingServerRequests.set(request.id, {
+          chatId: params.threadId,
+          kind: 'file-change-approval',
+          negativeDecision: 'decline',
+          requestId: request.id,
+        });
+        this.emit({
+          request: buildFileChangeApprovalRequest(request.id, params),
+          type: 'interaction-request',
+        });
+        return true;
+      }
+
+      case 'item/permissions/requestApproval': {
+        const params = request.params as RawPermissionsRequestApprovalParams | undefined;
+        if (!params) {
+          this.connection?.respondError(request.id, 'Missing permissions approval params.');
+          return true;
+        }
+
+        this.pendingServerRequests.set(request.id, {
+          chatId: params.threadId,
+          kind: 'permissions-approval',
+          permissions: params.permissions,
+          requestId: request.id,
+        });
+        this.emit({
+          request: buildPermissionsApprovalRequest(request.id, params),
+          type: 'interaction-request',
+        });
+        return true;
+      }
+
+      case 'item/tool/requestUserInput': {
+        const params = request.params as RawToolRequestUserInputParams | undefined;
+        if (!params) {
+          this.connection?.respondError(request.id, 'Missing user input request params.');
+          return true;
+        }
+
+        this.pendingServerRequests.set(request.id, {
+          chatId: params.threadId,
+          kind: 'user-input',
+          requestId: request.id,
+        });
+        this.emit({
+          request: buildUserInputRequest(request.id, params),
+          type: 'interaction-request',
+        });
+        return true;
+      }
+
+      case 'execCommandApproval': {
+        const params = request.params as RawLegacyExecCommandApprovalParams | undefined;
+        if (!params) {
+          this.connection?.respondError(request.id, 'Missing legacy command approval params.');
+          return true;
+        }
+
+        this.pendingServerRequests.set(request.id, {
+          chatId: params.conversationId,
+          kind: 'legacy-command-approval',
+          negativeDecision: 'denied',
+          requestId: request.id,
+        });
+        this.emit({
+          request: buildLegacyExecApprovalRequest(
+            request.id,
+            params,
+            this.runningTurnIds.get(params.conversationId),
+          ),
+          type: 'interaction-request',
+        });
+        return true;
+      }
+
+      case 'applyPatchApproval': {
+        const params = request.params as RawLegacyApplyPatchApprovalParams | undefined;
+        if (!params) {
+          this.connection?.respondError(request.id, 'Missing legacy file approval params.');
+          return true;
+        }
+
+        this.pendingServerRequests.set(request.id, {
+          chatId: params.conversationId,
+          kind: 'legacy-apply-patch-approval',
+          negativeDecision: 'denied',
+          requestId: request.id,
+        });
+        this.emit({
+          request: buildLegacyApplyPatchApprovalRequest(
+            request.id,
+            params,
+            this.runningTurnIds.get(params.conversationId),
+          ),
+          type: 'interaction-request',
+        });
+        return true;
+      }
+
+      default:
+        return false;
+    }
+  }
+
+  private mapLiveMessage(item: RawThreadItem, turnId: string): Message | null {
     if (isUserMessageItem(item)) {
       const content = flattenUserInputs(item.content);
       if (content.length === 0) {
@@ -1181,6 +1861,7 @@ export class AppServerClient implements RemoteAppClient {
         createdAt: new Date().toISOString(),
         id: item.id,
         role: 'user',
+        turnId,
       };
     }
 
@@ -1193,6 +1874,7 @@ export class AppServerClient implements RemoteAppClient {
       createdAt: new Date().toISOString(),
       id: item.id,
       role: 'assistant',
+      turnId,
     };
   }
 
@@ -1208,6 +1890,12 @@ export class AppServerClient implements RemoteAppClient {
     };
   }
 
+  private storeMappedThread(rawThread: RawThread) {
+    const thread = this.mergeThread(mapThread(rawThread));
+    this.storeThread(thread);
+    return thread;
+  }
+
   private async readRawThread(chatId: string) {
     const connection = await this.ensureConnection();
     const response = await connection.request<RawThreadReadResponse>('thread/read', {
@@ -1216,6 +1904,26 @@ export class AppServerClient implements RemoteAppClient {
     });
 
     return response.thread;
+  }
+
+  private clearPendingRequestsForChat(chatId: string) {
+    let cleared = false;
+
+    for (const [requestId, request] of this.pendingServerRequests.entries()) {
+      if (request.chatId !== chatId) {
+        continue;
+      }
+
+      this.pendingServerRequests.delete(requestId);
+      cleared = true;
+    }
+
+    if (cleared) {
+      this.emit({
+        chatId,
+        type: 'interaction-cleared',
+      });
+    }
   }
 
   private storeSummary(summary: ChatSummary) {
@@ -1258,10 +1966,21 @@ export class AppServerClient implements RemoteAppClient {
   }
 
   private async restoreAfterReconnect() {
+    const summaries = await this.listChats();
+    summaries.forEach((summary) => {
+      this.storeSummary(summary);
+    });
+
     const activeThreadIds = new Set<string>();
 
     this.runningTurnIds.forEach((_, chatId) => {
       activeThreadIds.add(chatId);
+    });
+
+    this.summaryCache.forEach((summary) => {
+      if (summary.status === 'running') {
+        activeThreadIds.add(summary.id);
+      }
     });
 
     this.threadCache.forEach((thread) => {
@@ -1281,20 +2000,22 @@ export class AppServerClient implements RemoteAppClient {
     while (Date.now() < deadline) {
       try {
         const rawThread = await this.readRawThread(chatId);
-        const thread = this.mergeThread(mapThread(rawThread));
-        this.storeThread(thread);
+        const thread = this.storeMappedThread(rawThread);
         const turn = rawThread.turns.find((candidate) => candidate.id === turnId) ?? null;
 
         if (!turn) {
           if (thread.status !== 'running') {
             this.runningTurnIds.delete(chatId);
+            this.clearPendingRequestsForChat(chatId);
             return thread;
           }
         } else if (turn.status === 'completed' || turn.status === 'interrupted') {
           this.runningTurnIds.delete(chatId);
+          this.clearPendingRequestsForChat(chatId);
           return thread;
         } else if (turn.status === 'failed') {
           this.runningTurnIds.delete(chatId);
+          this.clearPendingRequestsForChat(chatId);
           throw new Error(turn.error?.message ?? 'The app-server turn failed');
         }
       } catch (error) {
@@ -1307,7 +2028,6 @@ export class AppServerClient implements RemoteAppClient {
       await sleep(Math.min(TURN_RECOVERY_POLL_MS, Math.max(100, deadline - Date.now())));
     }
 
-    this.runningTurnIds.delete(chatId);
     throw new Error('Lost connection to the app-server and could not recover the active turn.');
   }
 }

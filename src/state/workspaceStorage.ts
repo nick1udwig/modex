@@ -1,4 +1,14 @@
-import type { ChatRuntimeSettings, ChatStatus, ChatSummary, ChatThread, Message, MessageRole } from '../app/types';
+import type {
+  ActivityEntry,
+  ActivityKind,
+  ActivityStatus,
+  ChatRuntimeSettings,
+  ChatStatus,
+  ChatSummary,
+  ChatThread,
+  Message,
+  MessageRole,
+} from '../app/types';
 
 interface WorkspaceSnapshot {
   activeChatId: string | null;
@@ -21,6 +31,8 @@ interface RawWorkspaceSnapshot {
 const STORAGE_KEY = 'modex.workspace.v1';
 const VALID_CHAT_STATUSES = new Set<ChatStatus>(['idle', 'running']);
 const VALID_MESSAGE_ROLES = new Set<MessageRole>(['assistant', 'system', 'user']);
+const VALID_ACTIVITY_KINDS = new Set<ActivityKind>(['command', 'file-change', 'plan', 'reasoning']);
+const VALID_ACTIVITY_STATUSES = new Set<ActivityStatus>(['completed', 'failed', 'in-progress']);
 
 const dedupeIds = (chatIds: string[]) => {
   const seen = new Set<string>();
@@ -108,6 +120,7 @@ const sanitizeMessage = (value: unknown): Message | null => {
   const content = typeof message.content === 'string' ? message.content : '';
   const role = normalizeMessageRole(message.role);
   const createdAt = normalizeIsoDate(message.createdAt);
+  const turnId = typeof message.turnId === 'string' && message.turnId.trim().length > 0 ? message.turnId : null;
 
   if (!id || role === null || createdAt === null) {
     return null;
@@ -118,6 +131,42 @@ const sanitizeMessage = (value: unknown): Message | null => {
     createdAt,
     id,
     role,
+    turnId,
+  };
+};
+
+const sanitizeActivityEntry = (value: unknown): ActivityEntry | null => {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const entry = value as Partial<ActivityEntry>;
+  const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+  const kind =
+    typeof entry.kind === 'string' && VALID_ACTIVITY_KINDS.has(entry.kind as ActivityKind)
+      ? (entry.kind as ActivityKind)
+      : null;
+  const summary = typeof entry.summary === 'string' ? entry.summary : '';
+  const detail = typeof entry.detail === 'string' ? entry.detail : '';
+  const status =
+    typeof entry.status === 'string' && VALID_ACTIVITY_STATUSES.has(entry.status as ActivityStatus)
+      ? (entry.status as ActivityStatus)
+      : null;
+  const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+  const turnId = typeof entry.turnId === 'string' ? entry.turnId.trim() : '';
+
+  if (!id || !kind || !status || !title || !turnId) {
+    return null;
+  }
+
+  return {
+    detail,
+    id,
+    kind,
+    status,
+    summary,
+    title,
+    turnId,
   };
 };
 
@@ -141,9 +190,15 @@ const sanitizeChatThread = (value: unknown): ChatThread | null => {
   const messages = Array.isArray(thread.messages)
     ? thread.messages.map(sanitizeMessage).filter((message): message is Message => Boolean(message))
     : [];
+  const activity = Array.isArray(thread.activity)
+    ? thread.activity
+        .map(sanitizeActivityEntry)
+        .filter((entry): entry is ActivityEntry => Boolean(entry))
+    : [];
 
   return {
     ...summary,
+    activity,
     cwd,
     messages,
     tokenUsageLabel,

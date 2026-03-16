@@ -65,6 +65,7 @@ export const appendMessageDelta = (thread: ChatThread, messageId: string, delta:
           createdAt: new Date().toISOString(),
           id: messageId,
           role: 'assistant',
+          turnId: null,
         },
       ],
     };

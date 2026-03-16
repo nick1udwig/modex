@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type {
+  ApprovalDecision,
   ChatRuntimeSettings,
+  InteractionRequest,
   ChatSummary,
   ChatThread,
   RemoteAppClient,
@@ -25,6 +27,7 @@ interface ModexState {
   chats: ChatSummary[];
   draftsByChatId: Record<string, string>;
   error: string | null;
+  interactionByChatId: Record<string, InteractionRequest | undefined>;
   loading: boolean;
   openTabs: Array<{
     chatId: string;
@@ -33,6 +36,30 @@ interface ModexState {
 }
 
 const DEFAULT_ACCESS_MODE: ChatRuntimeSettings['accessMode'] = 'workspace-write';
+const bootstrapWorkspace = () => {
+  const workspace = loadWorkspaceSnapshot();
+  if (!workspace) {
+    return null;
+  }
+
+  const cachedStatusByChatId = new Map(workspace.cachedChats.map((chat) => [chat.id, chat.status] satisfies [string, ChatSummary['status']]));
+  const openTabs = workspace.openChatIds.map((chatId) => ({
+    chatId,
+    status: workspace.cachedThreadsByChatId[chatId]?.status ?? cachedStatusByChatId.get(chatId) ?? 'idle',
+  }));
+
+  return {
+    activeChatId: workspace.activeChatId ?? openTabs[0]?.chatId ?? workspace.cachedChats[0]?.id ?? null,
+    chatMap: workspace.cachedThreadsByChatId,
+    chatSettingsByChatId: workspace.chatSettingsByChatId,
+    chats: workspace.cachedChats,
+    draftsByChatId: workspace.draftsByChatId,
+    error: null,
+    interactionByChatId: {},
+    loading: true,
+    openTabs,
+  } satisfies ModexState;
+};
 
 const compactText = (text: string) => text.replace(/\s+/g, ' ').trim();
 const previewFromContent = (text: string) => compactText(text) || 'Start a new request';
@@ -53,6 +80,21 @@ const withThreadMetadata = (
   ...updates,
 });
 
+const clearInteractionForChat = (
+  interactions: Record<string, InteractionRequest | undefined>,
+  chatId: string,
+) => {
+  if (!(chatId in interactions)) {
+    return interactions;
+  }
+
+  const next = {
+    ...interactions,
+  };
+  delete next[chatId];
+  return next;
+};
+
 const applyThread = (current: ModexState, thread: ChatThread): ModexState => ({
   ...current,
   chatMap: {
@@ -64,6 +106,7 @@ const applyThread = (current: ModexState, thread: ChatThread): ModexState => ({
     [thread.id]: inferSettings(thread, current.chatSettingsByChatId[thread.id]),
   },
   chats: updateChatSummary(current.chats, thread),
+  interactionByChatId: thread.status === 'idle' ? clearInteractionForChat(current.interactionByChatId, thread.id) : current.interactionByChatId,
   openTabs: setTabStatusIfOpen(current.openTabs, thread.id, thread.status),
 });
 
@@ -117,6 +160,10 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
               }),
             }
           : current.chatMap,
+        interactionByChatId:
+          event.status === 'idle'
+            ? clearInteractionForChat(current.interactionByChatId, event.chatId)
+            : current.interactionByChatId,
         openTabs: setTabStatusIfOpen(current.openTabs, event.chatId, event.status),
       };
     }
@@ -184,6 +231,22 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
       };
     }
 
+    case 'interaction-request':
+      return {
+        ...current,
+        error: null,
+        interactionByChatId: {
+          ...current.interactionByChatId,
+          [event.request.chatId]: event.request,
+        },
+      };
+
+    case 'interaction-cleared':
+      return {
+        ...current,
+        interactionByChatId: clearInteractionForChat(current.interactionByChatId, event.chatId),
+      };
+
     case 'error':
       return {
         ...current,
@@ -196,16 +259,20 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
 };
 
 export const useModexApp = (client: RemoteAppClient) => {
-  const [state, setState] = useState<ModexState>({
-    activeChatId: null,
-    chatMap: {},
-    chatSettingsByChatId: {},
-    chats: [],
-    draftsByChatId: {},
-    error: null,
-    loading: true,
-    openTabs: [],
-  });
+  const [state, setState] = useState<ModexState>(
+    () =>
+      bootstrapWorkspace() ?? {
+        activeChatId: null,
+        chatMap: {},
+        chatSettingsByChatId: {},
+        chats: [],
+        draftsByChatId: {},
+        error: null,
+        interactionByChatId: {},
+        loading: true,
+        openTabs: [],
+      },
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -234,6 +301,7 @@ export const useModexApp = (client: RemoteAppClient) => {
             chats: [summarizeThread(created)],
             draftsByChatId: {},
             error: null,
+            interactionByChatId: {},
             loading: false,
             openTabs: [{ chatId: created.id, status: created.status }],
           });
@@ -244,7 +312,10 @@ export const useModexApp = (client: RemoteAppClient) => {
         const openTabs = workspace
           ? workspace.openChatIds.map((chatId) => ({
               chatId,
-              status: chats.find((chat) => chat.id === chatId)?.status ?? 'idle',
+              status:
+                chats.find((chat) => chat.id === chatId)?.status ??
+                workspace.cachedThreadsByChatId[chatId]?.status ??
+                'idle',
             }))
           : defaultOpenTabs(chats);
         const activeChatId = workspace
@@ -261,9 +332,12 @@ export const useModexApp = (client: RemoteAppClient) => {
           return;
         }
 
-        const chatMap = Object.fromEntries(
-          hydratedThreads.map((thread) => [thread.id, thread] satisfies [string, ChatThread]),
-        );
+        const chatMap = {
+          ...(workspace?.cachedThreadsByChatId ?? {}),
+          ...Object.fromEntries(
+            hydratedThreads.map((thread) => [thread.id, thread] satisfies [string, ChatThread]),
+          ),
+        };
         const hydratedChats = hydratedThreads.reduce(updateChatSummary, chats);
         const chatSettingsByChatId = {
           ...(workspace?.chatSettingsByChatId ?? {}),
@@ -280,6 +354,7 @@ export const useModexApp = (client: RemoteAppClient) => {
           chats: hydratedChats,
           draftsByChatId: workspace?.draftsByChatId ?? {},
           error: null,
+          interactionByChatId: {},
           loading: false,
           openTabs,
         });
@@ -311,11 +386,21 @@ export const useModexApp = (client: RemoteAppClient) => {
 
     saveWorkspaceSnapshot({
       activeChatId: state.activeChatId,
+      cachedChats: state.chats,
+      cachedThreadsByChatId: state.chatMap,
       chatSettingsByChatId: state.chatSettingsByChatId,
       draftsByChatId: state.draftsByChatId,
       openChatIds: state.openTabs.map((tab) => tab.chatId),
     });
-  }, [state.activeChatId, state.chatSettingsByChatId, state.draftsByChatId, state.loading, state.openTabs]);
+  }, [
+    state.activeChatId,
+    state.chatMap,
+    state.chatSettingsByChatId,
+    state.chats,
+    state.draftsByChatId,
+    state.loading,
+    state.openTabs,
+  ]);
 
   const setDraft = (value: string) => {
     setState((current) => {
@@ -469,6 +554,7 @@ export const useModexApp = (client: RemoteAppClient) => {
                     role: 'user',
                     content,
                     createdAt: new Date().toISOString(),
+                    turnId: null,
                   },
                 ],
               },
@@ -516,9 +602,73 @@ export const useModexApp = (client: RemoteAppClient) => {
     }
   };
 
+  const interruptTurn = async () => {
+    const chatId = state.activeChatId;
+    if (!chatId) {
+      return;
+    }
+
+    try {
+      await client.interruptTurn(chatId);
+      setState((current) => ({
+        ...current,
+        error: null,
+        interactionByChatId: clearInteractionForChat(current.interactionByChatId, chatId),
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : 'Unable to stop the active run',
+      }));
+    }
+  };
+
+  const respondToApproval = async (decision: ApprovalDecision) => {
+    const activeRequest = state.activeChatId ? state.interactionByChatId[state.activeChatId] : null;
+    if (!activeRequest || activeRequest.kind !== 'approval') {
+      return;
+    }
+
+    try {
+      await client.respondToApproval(activeRequest, decision);
+      setState((current) => ({
+        ...current,
+        error: null,
+        interactionByChatId: clearInteractionForChat(current.interactionByChatId, activeRequest.chatId),
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : 'Unable to answer the approval request',
+      }));
+    }
+  };
+
+  const submitUserInput = async (answers: Record<string, string[]>) => {
+    const activeRequest = state.activeChatId ? state.interactionByChatId[state.activeChatId] : null;
+    if (!activeRequest || activeRequest.kind !== 'user-input') {
+      return;
+    }
+
+    try {
+      await client.submitUserInput(activeRequest, answers);
+      setState((current) => ({
+        ...current,
+        error: null,
+        interactionByChatId: clearInteractionForChat(current.interactionByChatId, activeRequest.chatId),
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : 'Unable to answer the request',
+      }));
+    }
+  };
+
   const activeChat = state.activeChatId ? state.chatMap[state.activeChatId] ?? null : null;
   const activeDraft = state.activeChatId ? state.draftsByChatId[state.activeChatId] ?? '' : '';
   const activeChatSettings = state.activeChatId ? state.chatSettingsByChatId[state.activeChatId] ?? null : null;
+  const activeInteraction = state.activeChatId ? state.interactionByChatId[state.activeChatId] ?? null : null;
 
   return useMemo(
     () => ({
@@ -526,14 +676,18 @@ export const useModexApp = (client: RemoteAppClient) => {
       activateChat,
       activeChat,
       activeChatSettings,
+      activeInteraction,
       closeTab,
       createChat,
       draft: activeDraft,
+      interruptTurn,
+      respondToApproval,
       sendMessage,
       setChatSettings,
       setDraft,
       setDraftForChat,
+      submitUserInput,
     }),
-    [activeChat, activeChatSettings, activeDraft, state],
+    [activeChat, activeChatSettings, activeDraft, activeInteraction, state],
   );
 };

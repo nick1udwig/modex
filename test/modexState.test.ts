@@ -45,12 +45,15 @@ test('updateChatSummary promotes and sorts updated chats', () => {
   ];
 
   const thread: ChatThread = {
+    activity: [],
+    cwd: '/workspace/older',
     id: 'older',
+    messages: [],
+    preview: 'Latest update',
     status: 'idle',
     title: 'Older refreshed',
+    tokenUsageLabel: null,
     updatedAt: '2026-03-10T09:00:00.000Z',
-    preview: 'Latest update',
-    messages: [],
   };
 
   assert.deepEqual(updateChatSummary(chats, thread), [

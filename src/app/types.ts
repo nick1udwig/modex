@@ -1,13 +1,27 @@
 export type ChatStatus = 'idle' | 'running';
 export type AccessMode = 'read-only' | 'workspace-write';
+export type JsonRpcId = number | string;
 
 export type MessageRole = 'system' | 'user' | 'assistant';
+export type ActivityKind = 'command' | 'file-change' | 'plan' | 'reasoning';
+export type ActivityStatus = 'completed' | 'failed' | 'in-progress';
 
 export interface Message {
   id: string;
   role: MessageRole;
   content: string;
   createdAt: string;
+  turnId: string | null;
+}
+
+export interface ActivityEntry {
+  id: string;
+  kind: ActivityKind;
+  summary: string;
+  detail: string;
+  status: ActivityStatus;
+  title: string;
+  turnId: string;
 }
 
 export interface ChatSummary {
@@ -19,6 +33,7 @@ export interface ChatSummary {
 }
 
 export interface ChatThread extends ChatSummary {
+  activity: ActivityEntry[];
   cwd: string;
   messages: Message[];
   tokenUsageLabel: string | null;
@@ -43,6 +58,44 @@ export interface SendMessagePayload {
   content: string;
   settings?: ChatRuntimeSettings;
 }
+
+export type ApprovalDecision = 'accept' | 'acceptForSession' | 'decline';
+
+export interface ApprovalRequest {
+  kind: 'approval';
+  requestId: JsonRpcId;
+  chatId: string;
+  turnId: string;
+  title: string;
+  message: string;
+  detailLines: string[];
+  allowSessionDecision: boolean;
+}
+
+export interface UserInputRequestOption {
+  description: string;
+  label: string;
+}
+
+export interface UserInputRequestQuestion {
+  header: string;
+  id: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: UserInputRequestOption[];
+  question: string;
+}
+
+export interface UserInputRequest {
+  kind: 'user-input';
+  requestId: JsonRpcId;
+  chatId: string;
+  turnId: string;
+  title: string;
+  questions: UserInputRequestQuestion[];
+}
+
+export type InteractionRequest = ApprovalRequest | UserInputRequest;
 
 export type RemoteThreadEvent =
   | {
@@ -80,6 +133,14 @@ export type RemoteThreadEvent =
       label: string | null;
     }
   | {
+      type: 'interaction-request';
+      request: InteractionRequest;
+    }
+  | {
+      type: 'interaction-cleared';
+      chatId: string;
+    }
+  | {
       type: 'error';
       chatId?: string;
       message: string;
@@ -90,5 +151,8 @@ export interface RemoteAppClient {
   getChat(chatId: string): Promise<ChatThread>;
   createChat(payload?: CreateChatPayload): Promise<ChatThread>;
   sendMessage(payload: SendMessagePayload): Promise<ChatThread>;
+  interruptTurn(chatId: string): Promise<void>;
+  respondToApproval(request: ApprovalRequest, decision: ApprovalDecision): Promise<void>;
+  submitUserInput(request: UserInputRequest, answers: Record<string, string[]>): Promise<void>;
   subscribe(listener: (event: RemoteThreadEvent) => void): () => void;
 }

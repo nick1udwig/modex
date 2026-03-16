@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildInitializeParams,
   flattenUserInputs,
   isAppServerConnectionClosedError,
   mapThread,
   mapThreadSummary,
   shouldResumeAfterTurnStartError,
 } from '../src/services/appServerClient.ts';
+
+test('buildInitializeParams opts into experimental API features', () => {
+  assert.equal(buildInitializeParams().capabilities.experimentalApi, true);
+});
 
 test('flattenUserInputs preserves text and labels non-text inputs', () => {
   assert.equal(
@@ -126,10 +131,80 @@ test('mapThread flattens turn history into chat messages', () => {
     thread.messages.map((message) => ({
       content: message.content,
       role: message.role,
+      turnId: message.turnId,
     })),
     [
-      { content: 'Explain the deployment error', role: 'user' },
-      { content: 'The service is missing its runtime env vars.', role: 'assistant' },
+      { content: 'Explain the deployment error', role: 'user', turnId: 'turn-1' },
+      { content: 'The service is missing its runtime env vars.', role: 'assistant', turnId: 'turn-1' },
+    ],
+  );
+});
+
+test('mapThread preserves non-message activity for later inspection', () => {
+  const thread = mapThread({
+    createdAt: 1_710_000_000,
+    cwd: '/workspace/project',
+    id: 'thr_activity',
+    modelProvider: 'openai',
+    name: null,
+    preview: '',
+    status: { type: 'idle' },
+    turns: [
+      {
+        id: 'turn-activity',
+        items: [
+          {
+            id: 'plan-1',
+            text: '1. Inspect the logs\\n2. Patch the config',
+            type: 'plan',
+          },
+          {
+            content: ['Root cause is a missing API key.'],
+            id: 'reasoning-1',
+            summary: ['Diagnosing the production failure'],
+            type: 'reasoning',
+          },
+          {
+            aggregatedOutput: 'ok',
+            command: 'npm test',
+            cwd: '/workspace/project',
+            exitCode: 0,
+            id: 'command-1',
+            status: 'completed',
+            type: 'commandExecution',
+          },
+          {
+            changes: [
+              {
+                diff: '@@ -1 +1 @@',
+                kind: 'modified',
+                path: 'src/config.ts',
+              },
+            ],
+            id: 'patch-1',
+            status: 'completed',
+            type: 'fileChange',
+          },
+        ],
+        status: 'completed',
+      },
+    ],
+    updatedAt: 1_710_000_120,
+  });
+
+  assert.deepEqual(
+    thread.activity.map((entry) => ({
+      id: entry.id,
+      kind: entry.kind,
+      status: entry.status,
+      title: entry.title,
+      turnId: entry.turnId,
+    })),
+    [
+      { id: 'plan-1', kind: 'plan', status: 'completed', title: 'Plan', turnId: 'turn-activity' },
+      { id: 'reasoning-1', kind: 'reasoning', status: 'completed', title: 'Reasoning', turnId: 'turn-activity' },
+      { id: 'command-1', kind: 'command', status: 'completed', title: 'npm test', turnId: 'turn-activity' },
+      { id: 'patch-1', kind: 'file-change', status: 'completed', title: 'src/config.ts', turnId: 'turn-activity' },
     ],
   );
 });
