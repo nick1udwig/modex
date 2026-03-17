@@ -32,8 +32,11 @@ const NOTIFICATION_OPTOUTS = [
 ] as const;
 const APP_SERVER_RECONNECT_DELAYS_MS = [300, 1_000, 2_500, 5_000] as const;
 const APP_SERVER_THREAD_REFRESH_MS = 2_000;
+const APP_SERVER_ITEM_REFRESH_MS = 250;
 const TURN_RECOVERY_POLL_MS = 1_000;
 const TURN_RECOVERY_TIMEOUT_MS = 10 * 60 * 1_000;
+const TURN_MATERIALIZATION_POLL_MS = 350;
+const TURN_MATERIALIZATION_TIMEOUT_MS = 15_000;
 
 interface AppServerConfig {
   approvalPolicy?: 'untrusted' | 'on-failure' | 'on-request' | 'never';
@@ -869,132 +872,196 @@ const normalizeActivityStatus = (
   return 'completed';
 };
 
+const activityEntryFromItem = (
+  item: RawThreadItem,
+  turnId: string,
+  options?: {
+    fallbackStatus?: ActivityStatus;
+  },
+): ActivityEntry | null => {
+  if (isCommentaryAgentMessageItem(item)) {
+    const detail = item.text.trim();
+    if (!detail) {
+      return null;
+    }
+
+    return {
+      detail,
+      id: item.id,
+      kind: 'commentary',
+      status: options?.fallbackStatus ?? 'completed',
+      summary: compactPreview(detail),
+      title: 'Agent update',
+      turnId,
+    } satisfies ActivityEntry;
+  }
+
+  if (isPlanItem(item)) {
+    const detail = item.text.trim();
+    if (!detail) {
+      return null;
+    }
+
+    return {
+      detail,
+      id: item.id,
+      kind: 'plan',
+      status: options?.fallbackStatus ?? 'completed',
+      summary: compactPreview(detail),
+      title: 'Plan',
+      turnId,
+    } satisfies ActivityEntry;
+  }
+
+  if (isReasoningItem(item)) {
+    const sections = [...(item.summary ?? []), ...(item.content ?? [])]
+      .map((section) => section.trim())
+      .filter((section) => section.length > 0);
+
+    if (sections.length === 0) {
+      return null;
+    }
+
+    return {
+      detail: sections.join('\n\n'),
+      id: item.id,
+      kind: 'reasoning',
+      status: options?.fallbackStatus ?? 'completed',
+      summary: compactPreview(sections[0]),
+      title: 'Reasoning',
+      turnId,
+    } satisfies ActivityEntry;
+  }
+
+  if (isCommandExecutionItem(item)) {
+    const command = item.command?.trim() ?? '';
+    const cwd = item.cwd?.trim() ?? '';
+    const output = item.aggregatedOutput?.trim() ?? '';
+    const detailLines = [
+      command ? `Command: ${command}` : null,
+      cwd ? `Directory: ${cwd}` : null,
+      item.exitCode === null || item.exitCode === undefined ? null : `Exit code: ${item.exitCode}`,
+      output.length > 0 ? '' : null,
+      output.length > 0 ? output : null,
+    ].filter((line): line is string => line !== null);
+
+    return {
+      detail: detailLines.join('\n'),
+      id: item.id,
+      kind: 'command',
+      status: item.status ? normalizeActivityStatus(item.status) : options?.fallbackStatus ?? 'completed',
+      summary: compactPreview(command || output || 'Shell command'),
+      title: command || 'Shell command',
+      turnId,
+    } satisfies ActivityEntry;
+  }
+
+  if (isFileChangeItem(item)) {
+    const changes = (item.changes ?? [])
+      .map((change) => {
+        const path = change.path?.trim() ?? '';
+        const kind = change.kind?.trim() ?? '';
+        const diff = change.diff?.trim() ?? '';
+        if (!path) {
+          return null;
+        }
+
+        return `${kind ? `${kind}: ` : ''}${path}${diff ? `\n${diff}` : ''}`;
+      })
+      .filter((entry): entry is string => Boolean(entry));
+
+    if (changes.length === 0) {
+      return null;
+    }
+
+    const fileList = (item.changes ?? [])
+      .map((change) => change.path?.trim() ?? '')
+      .filter((path): path is string => path.length > 0);
+
+    return {
+      detail: changes.join('\n\n'),
+      id: item.id,
+      kind: 'file-change',
+      status: item.status ? normalizeActivityStatus(item.status) : options?.fallbackStatus ?? 'completed',
+      summary: compactPreview(fileList.join(', ')),
+      title: fileList.length > 1 ? 'File changes' : fileList[0] ?? 'File change',
+      turnId,
+    } satisfies ActivityEntry;
+  }
+
+  return null;
+};
+
 const mapThreadActivity = (thread: RawThread): ActivityEntry[] =>
   thread.turns.flatMap((turn) =>
     turn.items.flatMap<ActivityEntry>((item) => {
-      if (isCommentaryAgentMessageItem(item)) {
-        const detail = item.text.trim();
-        if (!detail) {
-          return [];
-        }
-
-        return [
-          {
-            detail,
-            id: item.id,
-            kind: 'commentary',
-            status: 'completed',
-            summary: compactPreview(detail),
-            title: 'Agent update',
-            turnId: turn.id,
-          } satisfies ActivityEntry,
-        ];
-      }
-
-      if (isPlanItem(item)) {
-        const detail = item.text.trim();
-        if (!detail) {
-          return [];
-        }
-
-        return [
-          {
-            detail,
-            id: item.id,
-            kind: 'plan',
-            status: 'completed',
-            summary: compactPreview(detail),
-            title: 'Plan',
-            turnId: turn.id,
-          } satisfies ActivityEntry,
-        ];
-      }
-
-      if (isReasoningItem(item)) {
-        const sections = [...(item.summary ?? []), ...(item.content ?? [])]
-          .map((section) => section.trim())
-          .filter((section) => section.length > 0);
-
-        if (sections.length === 0) {
-          return [];
-        }
-
-        return [
-          {
-            detail: sections.join('\n\n'),
-            id: item.id,
-            kind: 'reasoning',
-            status: 'completed',
-            summary: compactPreview(sections[0]),
-            title: 'Reasoning',
-            turnId: turn.id,
-          } satisfies ActivityEntry,
-        ];
-      }
-
-      if (isCommandExecutionItem(item)) {
-        const command = item.command?.trim() ?? '';
-        const cwd = item.cwd?.trim() ?? '';
-        const output = item.aggregatedOutput?.trim() ?? '';
-        const detailLines = [
-          command ? `Command: ${command}` : null,
-          cwd ? `Directory: ${cwd}` : null,
-          item.exitCode === null || item.exitCode === undefined ? null : `Exit code: ${item.exitCode}`,
-          output.length > 0 ? '' : null,
-          output.length > 0 ? output : null,
-        ].filter((line): line is string => line !== null);
-
-        return [
-          {
-            detail: detailLines.join('\n'),
-            id: item.id,
-            kind: 'command',
-            status: normalizeActivityStatus(item.status),
-            summary: compactPreview(command || output || 'Shell command'),
-            title: command || 'Shell command',
-            turnId: turn.id,
-          } satisfies ActivityEntry,
-        ];
-      }
-
-      if (isFileChangeItem(item)) {
-        const changes = (item.changes ?? [])
-          .map((change) => {
-            const path = change.path?.trim() ?? '';
-            const kind = change.kind?.trim() ?? '';
-            const diff = change.diff?.trim() ?? '';
-            if (!path) {
-              return null;
-            }
-
-            return `${kind ? `${kind}: ` : ''}${path}${diff ? `\n${diff}` : ''}`;
-          })
-          .filter((entry): entry is string => Boolean(entry));
-
-        if (changes.length === 0) {
-          return [];
-        }
-
-        const fileList = (item.changes ?? [])
-          .map((change) => change.path?.trim() ?? '')
-          .filter((path): path is string => path.length > 0);
-
-        return [
-          {
-            detail: changes.join('\n\n'),
-            id: item.id,
-            kind: 'file-change',
-            status: normalizeActivityStatus(item.status),
-            summary: compactPreview(fileList.join(', ')),
-            title: fileList.length > 1 ? 'File changes' : fileList[0] ?? 'File change',
-            turnId: turn.id,
-          } satisfies ActivityEntry,
-        ];
-      }
-
-      return [];
+      const entry = activityEntryFromItem(item, turn.id, {
+        fallbackStatus: turn.status === 'inProgress' ? 'in-progress' : 'completed',
+      });
+      return entry ? [entry] : [];
     }),
   );
+
+const progressMessageFromActivity = (entry: ActivityEntry, createdAt: string): Message | null => {
+  const body = entry.detail.trim();
+  let content = body;
+
+  switch (entry.kind) {
+    case 'plan':
+      content = body ? `Plan\n${body}` : 'Plan';
+      break;
+    case 'reasoning':
+      content = body ? `Reasoning\n${body}` : 'Reasoning';
+      break;
+    case 'command': {
+      const prefix =
+        entry.status === 'failed'
+          ? 'Command failed'
+          : entry.status === 'completed'
+            ? 'Command finished'
+            : 'Running command';
+      content = `${prefix}: ${entry.title}${body ? `\n${body}` : ''}`;
+      break;
+    }
+    case 'file-change': {
+      const prefix =
+        entry.status === 'failed'
+          ? 'File changes failed'
+          : entry.status === 'completed'
+            ? 'Prepared file changes'
+            : 'Preparing file changes';
+      content = `${prefix}: ${entry.title}${body ? `\n${body}` : ''}`;
+      break;
+    }
+    default:
+      break;
+  }
+
+  if (compactSummaryText(content).length === 0) {
+    return null;
+  }
+
+  return {
+    content,
+    createdAt,
+    id: entry.id,
+    role: 'assistant',
+    turnId: entry.turnId,
+  };
+};
+
+const turnHasRenderableOutput = (turn: RawTurn) =>
+  turn.items.some((item) => {
+    if (isUserMessageItem(item)) {
+      return false;
+    }
+
+    if (isVisibleAgentMessageItem(item)) {
+      return compactSummaryText(item.text).length > 0;
+    }
+
+    return activityEntryFromItem(item, turn.id, { fallbackStatus: 'completed' }) !== null;
+  });
 
 const formatTokenUsageLabel = (totalTokens: number | null | undefined) => {
   if (!totalTokens || totalTokens <= 0) {
@@ -1128,7 +1195,23 @@ export const mapThreadMessages = (thread: RawThread): Message[] => {
           turnId: turn.id,
         });
         offset += 1;
+        continue;
       }
+
+      if (turn.status !== 'inProgress') {
+        continue;
+      }
+
+      const activityEntry = activityEntryFromItem(item, turn.id, { fallbackStatus: 'in-progress' });
+      const progressMessage = activityEntry
+        ? progressMessageFromActivity(activityEntry, messageTimestamp(thread.createdAt, offset))
+        : null;
+      if (!progressMessage) {
+        continue;
+      }
+
+      messages.push(progressMessage);
+      offset += 1;
     }
   }
 
@@ -1397,6 +1480,7 @@ export class AppServerClient implements RemoteAppClient {
   private reconnectTimerId: ReturnType<typeof globalThis.setTimeout> | null = null;
   private refreshingThreadIds = new Set<string>();
   private runningTurnIds = new Map<string, string>();
+  private itemRefreshTimerIds = new Map<string, ReturnType<typeof globalThis.setTimeout>>();
   private threadRefreshTimerId: ReturnType<typeof globalThis.setTimeout> | null = null;
   private summaryCache = new Map<string, ChatSummary>();
   private threadCache = new Map<string, ChatThread>();
@@ -1439,6 +1523,7 @@ export class AppServerClient implements RemoteAppClient {
       this.listeners.delete(listener);
       if (this.listeners.size === 0) {
         this.unbindReconnectSignals();
+        this.clearItemRefreshTimers();
         this.clearReconnectTimer();
         this.clearThreadRefreshTimer();
       }
@@ -1538,7 +1623,7 @@ export class AppServerClient implements RemoteAppClient {
     this.syncThreadRefreshTimer();
     try {
       await connection.waitForTurnCompletion(payload.chatId, started.turn.id);
-      return await this.getChat(payload.chatId);
+      return await this.awaitTurnOutputMaterialized(payload.chatId, started.turn.id);
     } catch (error) {
       if (!isAppServerConnectionClosedError(error) && !isAppServerTurnWaitTimeoutError(error)) {
         throw error;
@@ -1786,6 +1871,36 @@ export class AppServerClient implements RemoteAppClient {
     this.threadRefreshTimerId = null;
   }
 
+  private clearItemRefreshTimers(threadId?: string) {
+    if (threadId) {
+      const timerId = this.itemRefreshTimerIds.get(threadId);
+      if (timerId !== undefined) {
+        globalThis.clearTimeout(timerId);
+        this.itemRefreshTimerIds.delete(threadId);
+      }
+      return;
+    }
+
+    this.itemRefreshTimerIds.forEach((timerId) => {
+      globalThis.clearTimeout(timerId);
+    });
+    this.itemRefreshTimerIds.clear();
+  }
+
+  private queueThreadRefresh(threadId: string, delayMs = APP_SERVER_ITEM_REFRESH_MS) {
+    if (this.listeners.size === 0 || this.itemRefreshTimerIds.has(threadId)) {
+      return;
+    }
+
+    this.itemRefreshTimerIds.set(
+      threadId,
+      globalThis.setTimeout(() => {
+        this.itemRefreshTimerIds.delete(threadId);
+        void this.refreshThread(threadId, { suppressError: true });
+      }, delayMs),
+    );
+  }
+
   private syncThreadRefreshTimer() {
     if (this.listeners.size === 0) {
       this.clearThreadRefreshTimer();
@@ -1841,6 +1956,7 @@ export class AppServerClient implements RemoteAppClient {
     this.connection = null;
     this.connectionPromise = null;
     this.clearPendingRequests();
+    this.clearItemRefreshTimers();
     this.clearThreadRefreshTimer();
     connection.close();
     this.scheduleReconnect(true);
@@ -2001,6 +2117,7 @@ export class AppServerClient implements RemoteAppClient {
         }
 
         const message = this.mapLiveMessage(params.item, params.turnId);
+        this.queueThreadRefresh(params.threadId);
         if (!message) {
           return;
         }
@@ -2019,6 +2136,7 @@ export class AppServerClient implements RemoteAppClient {
           return;
         }
 
+        this.queueThreadRefresh(params.threadId);
         this.emit({
           chatId: params.threadId,
           delta: params.delta,
@@ -2035,6 +2153,7 @@ export class AppServerClient implements RemoteAppClient {
         }
 
         const message = this.mapLiveMessage(params.item, params.turnId);
+        this.queueThreadRefresh(params.threadId);
         if (!message) {
           return;
         }
@@ -2066,6 +2185,11 @@ export class AppServerClient implements RemoteAppClient {
         }
 
         this.syncThreadRefreshTimer();
+        if (params.turn.status === 'completed' || params.turn.status === 'interrupted') {
+          void this.reconcileCompletedTurn(params.threadId, params.turn.id);
+          return;
+        }
+
         void this.refreshThread(params.threadId);
         return;
       }
@@ -2394,6 +2518,64 @@ export class AppServerClient implements RemoteAppClient {
     }
   }
 
+  private async awaitTurnOutputMaterialized(chatId: string, turnId: string, initialRawThread?: RawThread) {
+    const deadline = Date.now() + TURN_MATERIALIZATION_TIMEOUT_MS;
+    let lastRawThread = initialRawThread ?? null;
+    let useInitialRawThread = initialRawThread !== undefined;
+
+    while (Date.now() < deadline) {
+      try {
+        const nextRawThread =
+          useInitialRawThread && lastRawThread ? lastRawThread : await this.readRawThread(chatId);
+        useInitialRawThread = false;
+
+        const turn = nextRawThread.turns.find((candidate) => candidate.id === turnId) ?? null;
+        if (turn?.status === 'failed') {
+          this.storeMappedThread(nextRawThread, { reportRecoveredFailure: true });
+          throw new Error(turn.error?.message ?? 'The app-server turn failed');
+        }
+
+        if (turn?.status === 'interrupted') {
+          return this.storeMappedThread(nextRawThread, { reportRecoveredFailure: true });
+        }
+
+        if (turn?.status === 'completed' && turnHasRenderableOutput(turn)) {
+          return this.storeMappedThread(nextRawThread, { reportRecoveredFailure: true });
+        }
+
+        lastRawThread = nextRawThread;
+      } catch (error) {
+        if (!isAppServerConnectionClosedError(error) && !isAppServerUnavailableError(error)) {
+          throw error;
+        }
+
+        lastRawThread = null;
+        useInitialRawThread = false;
+        this.nudgeReconnect();
+      }
+
+      await sleep(Math.min(TURN_MATERIALIZATION_POLL_MS, Math.max(100, deadline - Date.now())));
+    }
+
+    if (lastRawThread) {
+      return this.storeMappedThread(lastRawThread, { reportRecoveredFailure: true });
+    }
+
+    return await this.getChat(chatId);
+  }
+
+  private async reconcileCompletedTurn(chatId: string, turnId: string) {
+    try {
+      await this.awaitTurnOutputMaterialized(chatId, turnId);
+    } catch (error) {
+      this.emit({
+        chatId,
+        message: error instanceof Error ? error.message : 'Unable to finish syncing the completed turn',
+        type: 'error',
+      });
+    }
+  }
+
   private async restoreAfterReconnect() {
     const summaries = await this.listChats();
     summaries.forEach((summary) => {
@@ -2411,10 +2593,10 @@ export class AppServerClient implements RemoteAppClient {
     while (Date.now() < deadline) {
       try {
         const rawThread = await this.readRawThread(chatId);
-        const thread = this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
         const turn = rawThread.turns.find((candidate) => candidate.id === turnId) ?? null;
 
         if (!turn) {
+          const thread = this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
           if (thread.status !== 'running') {
             this.runningTurnIds.delete(chatId);
             this.clearPendingRequestsForChat(chatId);
@@ -2423,12 +2605,15 @@ export class AppServerClient implements RemoteAppClient {
         } else if (turn.status === 'completed' || turn.status === 'interrupted') {
           this.runningTurnIds.delete(chatId);
           this.clearPendingRequestsForChat(chatId);
-          return thread;
+          return await this.awaitTurnOutputMaterialized(chatId, turnId, rawThread);
         } else if (turn.status === 'failed') {
+          this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
           this.runningTurnIds.delete(chatId);
           this.clearPendingRequestsForChat(chatId);
           throw new Error(turn.error?.message ?? 'The app-server turn failed');
         }
+
+        this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
       } catch (error) {
         if (!isAppServerConnectionClosedError(error) && !isAppServerUnavailableError(error)) {
           throw error;

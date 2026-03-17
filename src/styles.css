@@ -351,6 +351,12 @@ textarea:disabled {
   overscroll-behavior: contain;
 }
 
+.message-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .run-row {
   flex: 0 0 auto;
   display: inline-flex;
@@ -380,6 +386,12 @@ textarea:disabled {
   border: 1px solid var(--border);
   padding: 10px 12px;
   overflow: hidden;
+}
+
+.message-card--progress {
+  background: rgba(255, 255, 255, 0.03);
+  border-style: dashed;
+  border-color: rgba(255, 132, 0, 0.28);
 }
 
 .message-card--selecting {
@@ -542,6 +554,19 @@ textarea:disabled {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.message-inline-stack {
+  width: min(100%, calc(100% - 28px));
+  align-self: stretch;
+  margin-left: 12px;
+}
+
+.message-inline-stack__items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .message-stack__summary {

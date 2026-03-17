@@ -113,7 +113,7 @@ export const useRealtimeTranscription = () => {
   const itemsRef = useRef(new Map<string, string>());
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const publishCompletedResultRef = useRef(true);
-  const sentAudioMsRef = useRef(0);
+  const bufferedAudioMsRef = useRef(0);
   const sessionMetaRef = useRef<StartTranscriptionOptions | null>(null);
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const startSequenceRef = useRef(0);
@@ -181,7 +181,7 @@ export const useRealtimeTranscription = () => {
     });
     itemsRef.current.clear();
     itemOrderRef.current = [];
-    sentAudioMsRef.current = 0;
+    bufferedAudioMsRef.current = 0;
     sessionMetaRef.current = null;
     setSession(null);
 
@@ -277,7 +277,7 @@ export const useRealtimeTranscription = () => {
       return finalText;
     }
 
-    if (sentAudioMsRef.current < MIN_AUDIO_COMMIT_MS) {
+    if (bufferedAudioMsRef.current < MIN_AUDIO_COMMIT_MS) {
       finishSession(publishCompletedResultRef.current);
       return finalText;
     }
@@ -316,7 +316,7 @@ export const useRealtimeTranscription = () => {
     itemOrderRef.current = [];
     itemsRef.current.clear();
     publishCompletedResultRef.current = true;
-    sentAudioMsRef.current = 0;
+    bufferedAudioMsRef.current = 0;
     setCompletedResult(null);
     setError(null);
 
@@ -379,6 +379,7 @@ export const useRealtimeTranscription = () => {
 
         if (payload.type === 'input_audio_buffer.committed' && payload.item_id) {
           insertCommittedItem(itemOrderRef.current, payload.item_id, payload.previous_item_id);
+          bufferedAudioMsRef.current = 0;
         }
 
         if (payload.item_id && typeof payload.delta === 'string' && payload.type?.includes('transcription')) {
@@ -460,7 +461,7 @@ export const useRealtimeTranscription = () => {
           return;
         }
 
-        sentAudioMsRef.current += ((channels[0]?.length ?? 0) / audioContext.sampleRate) * 1_000;
+        bufferedAudioMsRef.current += ((channels[0]?.length ?? 0) / audioContext.sampleRate) * 1_000;
 
         ws.send(
           JSON.stringify({

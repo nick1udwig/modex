@@ -23,7 +23,7 @@ const makeRawThread = (
     turns: Array<{
       error?: { message: string } | null;
       id: string;
-      items: Array<{
+      items: Array<Record<string, unknown> & {
         id: string;
         type: string;
       }>;
@@ -368,6 +368,58 @@ test('mapThread flattens turn history into chat messages', () => {
   );
 });
 
+test('mapThread exposes in-progress activity items as transient assistant updates', () => {
+  const thread = mapThread({
+    createdAt: 1_710_000_000,
+    cwd: '/workspace/project',
+    id: 'thr_progress',
+    modelProvider: 'openai',
+    name: null,
+    preview: '',
+    status: { type: 'active', activeFlags: [] },
+    turns: [
+      {
+        id: 'turn-progress',
+        items: [
+          {
+            content: [{ type: 'text', text: 'Check the follow-up behavior' }],
+            id: 'item-user',
+            type: 'userMessage',
+          },
+          {
+            id: 'commentary-1',
+            phase: 'commentary',
+            text: 'Reading the live thread data now.',
+            type: 'agentMessage',
+          },
+          {
+            command: 'npm test',
+            cwd: '/workspace/project',
+            id: 'command-1',
+            status: 'inProgress',
+            type: 'commandExecution',
+          },
+        ],
+        status: 'inProgress',
+      },
+    ],
+    updatedAt: 1_710_000_120,
+  });
+
+  assert.deepEqual(
+    thread.messages.map((message) => message.content),
+    [
+      'Check the follow-up behavior',
+      'Reading the live thread data now.',
+      'Running command: npm test\nCommand: npm test\nDirectory: /workspace/project',
+    ],
+  );
+  assert.deepEqual(
+    thread.activity.map((entry) => entry.status),
+    ['in-progress', 'in-progress'],
+  );
+});
+
 test('mapThread preserves non-message activity for later inspection', () => {
   const thread = mapThread({
     createdAt: 1_710_000_000,
@@ -579,4 +631,90 @@ test('foreground resume restarts an existing connection after the app was backgr
 
   assert.equal(restarted, 1);
   assert.equal(nudged, 0);
+});
+
+test('sendMessage waits for completed turn output to materialize before returning the thread', async () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  let readCount = 0;
+
+  (client as any).ensureConnection = async () => ({
+    request: async (method: string) => {
+      if (method === 'turn/start') {
+        return {
+          turn: {
+            id: 'turn-followup',
+            items: [],
+            status: 'inProgress',
+          },
+        };
+      }
+
+      throw new Error(`Unexpected request: ${method}`);
+    },
+    waitForTurnCompletion: async () => undefined,
+  });
+
+  (client as any).readRawThread = async () => {
+    readCount += 1;
+
+    if (readCount === 1) {
+      return makeRawThread({
+        id: 'chat-followup',
+        status: { type: 'idle' },
+        turns: [
+          {
+            id: 'turn-followup',
+            items: [
+              {
+                content: [{ type: 'text', text: 'Follow up' }],
+                id: 'user-followup',
+                type: 'userMessage',
+              },
+            ],
+            status: 'completed',
+          },
+        ],
+      });
+    }
+
+    return makeRawThread({
+      id: 'chat-followup',
+      preview: 'Here is the follow-up reply.',
+      status: { type: 'idle' },
+      turns: [
+        {
+          id: 'turn-followup',
+          items: [
+            {
+              content: [{ type: 'text', text: 'Follow up' }],
+              id: 'user-followup',
+              type: 'userMessage',
+            },
+            {
+              id: 'assistant-followup',
+              phase: 'final_answer',
+              text: 'Here is the follow-up reply.',
+              type: 'agentMessage',
+            },
+          ],
+          status: 'completed',
+        },
+      ],
+    });
+  };
+
+  const thread = await client.sendMessage({
+    attachments: [],
+    chatId: 'chat-followup',
+    content: 'Follow up',
+    settings: {
+      accessMode: 'workspace-write',
+      model: null,
+      reasoningEffort: null,
+      roots: ['/workspace/project'],
+    },
+  });
+
+  assert.equal(readCount, 2);
+  assert.equal(thread.messages[thread.messages.length - 1]?.content, 'Here is the follow-up reply.');
 });

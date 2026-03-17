@@ -112,6 +112,7 @@ export const ConversationView = ({
   const [notice, setNotice] = useState<string | null>(null);
   const [detailsMessageId, setDetailsMessageId] = useState<string | null>(null);
   const [detailsStackExpanded, setDetailsStackExpanded] = useState(false);
+  const [expandedStackMessageId, setExpandedStackMessageId] = useState<string | null>(null);
   const [messageMenu, setMessageMenu] = useState<{
     menuLeft: number;
     menuTop: number;
@@ -125,6 +126,7 @@ export const ConversationView = ({
     setNotice(null);
     setDetailsMessageId(null);
     setDetailsStackExpanded(false);
+    setExpandedStackMessageId(null);
     setMessageMenu(null);
     setModelMenuOpen(false);
     setSelectionMessageId(null);
@@ -301,10 +303,12 @@ export const ConversationView = ({
     });
   };
 
-  const enableMessageSelection = (messageId: string) => {
+  const enableMessageSelection = (messageId: string, options?: { preserveMenu?: boolean }) => {
     const bodyNode = messageBodyNodesRef.current[messageId];
     clearNativeSelection();
-    setMessageMenu(null);
+    if (!options?.preserveMenu) {
+      setMessageMenu(null);
+    }
     setDetailsMessageId(null);
     setSelectionMessageId(messageId);
     setNotice('Text selection enabled');
@@ -357,7 +361,7 @@ export const ConversationView = ({
 
         longPressRef.current.triggered = true;
         if (longPressRef.current.mode === 'selection') {
-          enableMessageSelection(messageId);
+          enableMessageSelection(messageId, { preserveMenu: true });
           return;
         }
 
@@ -485,58 +489,115 @@ export const ConversationView = ({
         {chat?.messages.filter((message) => message.role !== 'system').map((message, index, messages) => {
           const isLastAssistant = message.role === 'assistant' && index === messages.length - 1;
           const isEnteringUserMessage = message.role === 'user' && message.id.startsWith('optimistic-');
+          const messageActivity = activityForMessage(chat, message.id);
+          const stackEntries = [...messageActivity].reverse();
+          const isIntermediateMessage = message.role === 'assistant' && chat.activity.some((entry) => entry.id === message.id);
+          const showInlineStack = message.role === 'assistant' && !isIntermediateMessage && stackEntries.length > 0;
+          const inlineStackExpanded = expandedStackMessageId === message.id;
+          const topStackEntry = stackEntries[0] ?? null;
 
           return (
-            <div
-              key={message.id}
-              ref={(node) => {
-                messageNodesRef.current[message.id] = node;
-              }}
-              data-message-id={message.id}
-              className={`message-card message-card--${message.role} ${
-                isEnteringUserMessage ? 'message-card--enter' : ''
-              } ${selectionMessageId === message.id ? 'message-card--selecting' : ''} ${
-                spotlightMessageId === message.id ? 'message-card--spotlight' : ''
-              }`}
-              onContextMenu={(event) => {
-                const suppressed = suppressContextMenuRef.current;
-                if (suppressed && suppressed.messageId === message.id && suppressed.expiresAt > Date.now()) {
-                  event.preventDefault();
-                  return;
-                }
+            <div key={message.id} className="message-block">
+              {showInlineStack && topStackEntry ? (
+                <div className="message-inline-stack">
+                  <button
+                    className={`message-stack__summary ${inlineStackExpanded ? 'message-stack__summary--expanded' : ''}`}
+                    type="button"
+                    onClick={() => setExpandedStackMessageId((current) => (current === message.id ? null : message.id))}
+                  >
+                    <div className="message-stack__summary-header">
+                      <span className="message-stack__title">Agent activity</span>
+                      <span className="message-stack__count">
+                        {inlineStackExpanded ? 'Hide stack' : `${stackEntries.length} saved`}
+                      </span>
+                    </div>
+                    <div className="message-stack__layers" aria-hidden="true">
+                      <span />
+                      <span />
+                    </div>
+                    <article className="message-sheet__detail-card message-sheet__detail-card--stack">
+                      <div className="message-sheet__detail-header">
+                        <span className="message-sheet__detail-title">{topStackEntry.title}</span>
+                        <span className={`message-sheet__detail-status message-sheet__detail-status--${topStackEntry.status}`}>
+                          {topStackEntry.status.replace('-', ' ')}
+                        </span>
+                      </div>
+                      <div className="message-sheet__detail-kind">{topStackEntry.kind.replace('-', ' ')}</div>
+                      <p className="message-sheet__detail-summary">{topStackEntry.summary}</p>
+                      {topStackEntry.detail ? <pre className="message-sheet__detail-body">{topStackEntry.detail}</pre> : null}
+                    </article>
+                  </button>
 
-                event.preventDefault();
-                openMessageActions(message.id);
-              }}
-              onPointerDown={(event) => handleMessagePointerDown(event, message.id)}
-              onPointerMove={handleMessagePointerMove}
-              onPointerUp={handleMessagePointerEnd}
-              onPointerCancel={handleMessagePointerEnd}
-              onPointerLeave={handleMessagePointerEnd}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
+                  {inlineStackExpanded ? (
+                    <div className="message-inline-stack__items">
+                      {stackEntries.slice(1).map((entry) => (
+                        <article key={entry.id} className="message-sheet__detail-card">
+                          <div className="message-sheet__detail-header">
+                            <span className="message-sheet__detail-title">{entry.title}</span>
+                            <span className={`message-sheet__detail-status message-sheet__detail-status--${entry.status}`}>
+                              {entry.status.replace('-', ' ')}
+                            </span>
+                          </div>
+                          <div className="message-sheet__detail-kind">{entry.kind.replace('-', ' ')}</div>
+                          <p className="message-sheet__detail-summary">{entry.summary}</p>
+                          {entry.detail ? <pre className="message-sheet__detail-body">{entry.detail}</pre> : null}
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div
+                ref={(node) => {
+                  messageNodesRef.current[message.id] = node;
+                }}
+                data-message-id={message.id}
+                className={`message-card message-card--${message.role} ${
+                  isEnteringUserMessage ? 'message-card--enter' : ''
+                } ${selectionMessageId === message.id ? 'message-card--selecting' : ''} ${
+                  spotlightMessageId === message.id ? 'message-card--spotlight' : ''
+                } ${isIntermediateMessage ? 'message-card--progress' : ''}`}
+                onContextMenu={(event) => {
+                  const suppressed = suppressContextMenuRef.current;
+                  if (suppressed && suppressed.messageId === message.id && suppressed.expiresAt > Date.now()) {
+                    event.preventDefault();
+                    return;
+                  }
+
                   event.preventDefault();
                   openMessageActions(message.id);
-                }
-              }}
-              aria-label={`${messageLabel(message.role)} message`}
-            >
-              <p
-                ref={(node) => {
-                  messageBodyNodesRef.current[message.id] = node;
                 }}
-                className={`message-card__body ${selectionMessageId === message.id ? 'message-card__body--selectable' : ''}`}
+                onPointerDown={(event) => handleMessagePointerDown(event, message.id)}
+                onPointerMove={handleMessagePointerMove}
+                onPointerUp={handleMessagePointerEnd}
+                onPointerCancel={handleMessagePointerEnd}
+                onPointerLeave={handleMessagePointerEnd}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openMessageActions(message.id);
+                  }
+                }}
+                aria-label={`${messageLabel(message.role)} message`}
               >
-                <HighlightedText
-                  activeHitId={activeSearchHitId}
-                  hitIdPrefix={`search-hit-${message.id}`}
-                  query={searchQuery}
-                  text={message.content}
-                />
-              </p>
-              {isLastAssistant ? <span className="message-card__meta">{formatMeta(chat.updatedAt)}</span> : null}
+                <p
+                  ref={(node) => {
+                    messageBodyNodesRef.current[message.id] = node;
+                  }}
+                  className={`message-card__body ${selectionMessageId === message.id ? 'message-card__body--selectable' : ''}`}
+                >
+                  <HighlightedText
+                    activeHitId={activeSearchHitId}
+                    hitIdPrefix={`search-hit-${message.id}`}
+                    query={searchQuery}
+                    text={message.content}
+                  />
+                </p>
+                {isLastAssistant ? <span className="message-card__meta">{formatMeta(chat.updatedAt)}</span> : null}
+              </div>
             </div>
           );
         })}
