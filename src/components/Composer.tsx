@@ -34,7 +34,7 @@ interface ComposerProps {
   onToggleAccessMode: (mode: AccessMode) => void;
   openTabCount: number;
   recording: boolean;
-  recordingStatus?: 'connecting' | 'recording' | null;
+  recordingStatus?: 'connecting' | 'processing' | 'recording' | null;
   registerFooterActionNode?: (node: HTMLButtonElement | null) => void;
   searchActive: boolean;
   searchHitLabel: string | null;
@@ -81,9 +81,10 @@ export const Composer = ({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const hasDraft = draft.trim().length > 0;
+  const voiceProcessing = recordingStatus === 'processing';
   const showStop = busy && !recording;
   const showSend = !showStop && !searchActive && (hasDraft || attachments.length > 0) && !recording;
-  const recordingLabel = recordingStatus === 'connecting' ? 'Starting voice' : 'Transcribing';
+  const recordingLabel = recordingStatus === 'connecting' ? 'Starting voice' : voiceProcessing ? 'Finishing voice' : 'Transcribing';
 
   useEffect(() => {
     if (!inputRef.current) {
@@ -220,6 +221,10 @@ export const Composer = ({
                 return;
               }
 
+              if (voiceProcessing) {
+                return;
+              }
+
               onToggleVoiceInput();
             }}
             aria-label={
@@ -227,12 +232,14 @@ export const Composer = ({
                 ? 'Stop current run'
                 : showSend
                   ? 'Send message'
-                  : recording
+                  : voiceProcessing
+                    ? 'Finishing voice input'
+                    : recording
                     ? `${recordingLabel}. Tap to stop voice input`
                     : 'Voice input'
             }
             aria-pressed={recording || showStop}
-            aria-disabled={showSend ? busy : false}
+            aria-disabled={showSend ? busy : voiceProcessing}
           >
             <Icon name={showStop ? 'stop' : showSend ? 'arrow-up' : 'mic'} size={16} />
             {recording ? <span className="composer-send__label">{recordingLabel}</span> : null}

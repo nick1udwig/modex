@@ -203,6 +203,7 @@ export const App = () => {
   const selectedModel = modelOptions.find((model) => model.id === selectedModelId) ?? defaultModel;
   const selectedReasoningEffort =
     modex.activeChatSettings?.reasoningEffort ?? selectedModel.defaultReasoningEffort ?? defaultModel.defaultReasoningEffort;
+  const completedTranscription = transcription.completedResult;
 
   useEffect(() => {
     drawerProgressRef.current = drawerProgress;
@@ -878,29 +879,14 @@ export const App = () => {
     '--drawer-progress': `${drawerProgress}`,
   } as CSSProperties;
   const commitTranscription = (persist = true) => {
-    const activeSession = transcription.session;
-    if (!activeSession) {
-      return '';
-    }
-
-    const nextText = transcription.stop();
-    if (!persist) {
-      return nextText;
-    }
-
-    if (activeSession.target === 'search') {
-      setSearchQuery(nextText);
-      return nextText;
-    }
-
-    if (activeSession.chatId) {
-      modex.setDraftForChat(activeSession.chatId, nextText);
-    }
-
-    return nextText;
+    return transcription.stop(persist);
   };
   const toggleVoiceInput = () => {
     if (transcription.active) {
+      if (transcription.session?.status === 'processing') {
+        return;
+      }
+
       commitTranscription();
       return;
     }
@@ -976,6 +962,20 @@ export const App = () => {
 
     commitTranscription();
   }, [modex.activeChatId, transcription.session]);
+
+  useEffect(() => {
+    if (!completedTranscription) {
+      return;
+    }
+
+    if (completedTranscription.target === 'search') {
+      setSearchQuery(completedTranscription.text);
+    } else if (completedTranscription.chatId) {
+      modex.setDraftForChat(completedTranscription.chatId, completedTranscription.text);
+    }
+
+    transcription.clearCompletedResult();
+  }, [completedTranscription]);
 
   const searchTotal =
     searchContext === 'chat'
