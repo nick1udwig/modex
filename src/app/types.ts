@@ -82,7 +82,12 @@ export interface ModelOption {
   supportedReasoningEfforts: ReasoningEffort[];
 }
 
-export type ApprovalDecision = 'accept' | 'acceptForSession' | 'decline';
+export type ApprovalDecision =
+  | 'accept'
+  | 'acceptForSession'
+  | 'decline'
+  | 'cancel'
+  | { acceptWithExecpolicyAmendment: { execpolicy_amendment: string[] } };
 
 export interface ApprovalRequest {
   kind: 'approval';
@@ -92,7 +97,10 @@ export interface ApprovalRequest {
   title: string;
   message: string;
   detailLines: string[];
+  allowCancelDecision: boolean;
+  allowDeclineDecision: boolean;
   allowSessionDecision: boolean;
+  execPolicyAmendment: string[] | null;
 }
 
 export interface UserInputRequestOption {
@@ -162,6 +170,8 @@ export type RemoteThreadEvent =
   | {
       type: 'interaction-cleared';
       chatId: string;
+      requestId?: JsonRpcId;
+      turnId?: string;
     }
   | {
       type: 'error';

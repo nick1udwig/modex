@@ -280,6 +280,7 @@ interface RawCommandExecutionRequestApprovalParams {
   command?: string | null;
   cwd?: string | null;
   itemId: string;
+  proposedExecpolicyAmendment?: string[] | null;
   reason?: string | null;
   threadId: string;
   turnId: string;
@@ -339,13 +340,11 @@ type PendingServerRequest =
       kind: 'command-approval';
       requestId: JsonRpcId;
       chatId: string;
-      negativeDecision: 'cancel' | 'decline';
     }
   | {
       kind: 'file-change-approval';
       requestId: JsonRpcId;
       chatId: string;
-      negativeDecision: 'cancel' | 'decline';
     }
   | {
       kind: 'permissions-approval';
@@ -357,13 +356,11 @@ type PendingServerRequest =
       kind: 'legacy-command-approval';
       requestId: JsonRpcId;
       chatId: string;
-      negativeDecision: 'abort' | 'denied';
     }
   | {
       kind: 'legacy-apply-patch-approval';
       requestId: JsonRpcId;
       chatId: string;
-      negativeDecision: 'abort' | 'denied';
     }
   | {
       kind: 'user-input';
@@ -627,15 +624,29 @@ const permissionDetailLines = (permissions: RawAdditionalPermissionProfile | nul
 const allowsSessionDecision = (availableDecisions: RawCommandExecutionApprovalDecision[] | null | undefined) =>
   !availableDecisions || availableDecisions.some((decision) => decision === 'acceptForSession');
 
-const negativeDecision = (
-  availableDecisions: RawCommandExecutionApprovalDecision[] | null | undefined,
-): 'cancel' | 'decline' =>
-  availableDecisions?.some((decision) => decision === 'decline') ? 'decline' : 'cancel';
+const allowsDeclineDecision = (availableDecisions: RawCommandExecutionApprovalDecision[] | null | undefined) =>
+  !availableDecisions || availableDecisions.some((decision) => decision === 'decline');
 
-const buildCommandApprovalRequest = (
+const allowsCancelDecision = (availableDecisions: RawCommandExecutionApprovalDecision[] | null | undefined) =>
+  !availableDecisions || availableDecisions.some((decision) => decision === 'cancel');
+
+const allowsExecPolicyAmendmentDecision = (
+  availableDecisions: RawCommandExecutionApprovalDecision[] | null | undefined,
+) =>
+  !availableDecisions ||
+  availableDecisions.some(
+    (decision) =>
+      typeof decision === 'object' &&
+      decision !== null &&
+      'acceptWithExecpolicyAmendment' in decision,
+  );
+
+export const buildCommandApprovalRequest = (
   requestId: JsonRpcId,
   params: RawCommandExecutionRequestApprovalParams,
 ): ApprovalRequest => ({
+  allowCancelDecision: allowsCancelDecision(params.availableDecisions),
+  allowDeclineDecision: allowsDeclineDecision(params.availableDecisions),
   allowSessionDecision: allowsSessionDecision(params.availableDecisions),
   chatId: params.threadId,
   detailLines: [
@@ -643,6 +654,10 @@ const buildCommandApprovalRequest = (
     detailLine('Directory', params.cwd),
     ...permissionDetailLines(params.additionalPermissions),
   ].flatMap((line) => (line ? [line] : [])),
+  execPolicyAmendment:
+    params.proposedExecpolicyAmendment?.length && allowsExecPolicyAmendmentDecision(params.availableDecisions)
+      ? params.proposedExecpolicyAmendment
+      : null,
   kind: 'approval',
   message: params.reason?.trim() || 'Codex wants to run a command.',
   requestId,
@@ -654,9 +669,12 @@ const buildFileChangeApprovalRequest = (
   requestId: JsonRpcId,
   params: RawFileChangeRequestApprovalParams,
 ): ApprovalRequest => ({
+  allowCancelDecision: true,
+  allowDeclineDecision: true,
   allowSessionDecision: true,
   chatId: params.threadId,
   detailLines: [detailLine('Writable root', params.grantRoot)].flatMap((line) => (line ? [line] : [])),
+  execPolicyAmendment: null,
   kind: 'approval',
   message: params.reason?.trim() || 'Codex wants permission to apply file changes.',
   requestId,
@@ -668,9 +686,12 @@ const buildPermissionsApprovalRequest = (
   requestId: JsonRpcId,
   params: RawPermissionsRequestApprovalParams,
 ): ApprovalRequest => ({
+  allowCancelDecision: false,
+  allowDeclineDecision: true,
   allowSessionDecision: true,
   chatId: params.threadId,
   detailLines: permissionDetailLines(params.permissions),
+  execPolicyAmendment: null,
   kind: 'approval',
   message: params.reason?.trim() || 'Codex wants additional permissions.',
   requestId,
@@ -683,12 +704,15 @@ const buildLegacyExecApprovalRequest = (
   params: RawLegacyExecCommandApprovalParams,
   fallbackTurnId: string | undefined,
 ): ApprovalRequest => ({
+  allowCancelDecision: false,
+  allowDeclineDecision: true,
   allowSessionDecision: true,
   chatId: params.conversationId,
   detailLines: [
     params.command.length > 0 ? `Command: ${params.command.join(' ')}` : null,
     detailLine('Directory', params.cwd),
   ].flatMap((line) => (line ? [line] : [])),
+  execPolicyAmendment: null,
   kind: 'approval',
   message: params.reason?.trim() || 'Codex wants to run a command.',
   requestId,
@@ -701,9 +725,12 @@ const buildLegacyApplyPatchApprovalRequest = (
   params: RawLegacyApplyPatchApprovalParams,
   fallbackTurnId: string | undefined,
 ): ApprovalRequest => ({
+  allowCancelDecision: false,
+  allowDeclineDecision: true,
   allowSessionDecision: true,
   chatId: params.conversationId,
   detailLines: [detailLine('Writable root', params.grantRoot)].flatMap((line) => (line ? [line] : [])),
+  execPolicyAmendment: null,
   kind: 'approval',
   message: params.reason?.trim() || 'Codex wants permission to apply file changes.',
   requestId,
@@ -1447,28 +1474,63 @@ export class AppServerClient implements RemoteAppClient {
 
     switch (pending.kind) {
       case 'command-approval':
-      case 'file-change-approval':
         connection.respond(request.requestId, {
-          decision: decision === 'decline' ? pending.negativeDecision : decision,
+          decision,
+        });
+        break;
+
+      case 'file-change-approval':
+        if (typeof decision !== 'string') {
+          throw new Error('File change approvals do not support command policy amendments.');
+        }
+
+        connection.respond(request.requestId, {
+          decision,
         });
         break;
 
       case 'legacy-command-approval':
-      case 'legacy-apply-patch-approval':
+        if (typeof decision !== 'string') {
+          throw new Error('That approval path does not support command policy amendments.');
+        }
+
         connection.respond(request.requestId, {
           decision:
             decision === 'accept'
               ? 'approved'
               : decision === 'acceptForSession'
                 ? 'approved_for_session'
-                : pending.negativeDecision,
+                : decision === 'cancel'
+                  ? 'abort'
+                  : 'denied',
+        });
+        break;
+
+      case 'legacy-apply-patch-approval':
+        if (typeof decision !== 'string') {
+          throw new Error('That approval path does not support command policy amendments.');
+        }
+
+        connection.respond(request.requestId, {
+          decision:
+            decision === 'accept'
+              ? 'approved'
+              : decision === 'acceptForSession'
+                ? 'approved_for_session'
+                : decision === 'cancel'
+                  ? 'abort'
+                  : 'denied',
         });
         break;
 
       case 'permissions-approval':
-        if (decision === 'decline') {
+        if (decision === 'decline' || decision === 'cancel') {
           connection.respondError(request.requestId, 'User declined additional permissions.', 4001);
           break;
+        }
+
+        if (typeof decision !== 'string') {
+          throw new Error('That approval path does not support command policy amendments.');
         }
 
         connection.respond(request.requestId, {
@@ -1484,6 +1546,8 @@ export class AppServerClient implements RemoteAppClient {
     this.pendingServerRequests.delete(request.requestId);
     this.emit({
       chatId: request.chatId,
+      requestId: request.requestId,
+      turnId: request.turnId,
       type: 'interaction-cleared',
     });
   }
@@ -1501,6 +1565,8 @@ export class AppServerClient implements RemoteAppClient {
     this.pendingServerRequests.delete(request.requestId);
     this.emit({
       chatId: request.chatId,
+      requestId: request.requestId,
+      turnId: request.turnId,
       type: 'interaction-cleared',
     });
   }
@@ -1830,7 +1896,6 @@ export class AppServerClient implements RemoteAppClient {
         this.pendingServerRequests.set(request.id, {
           chatId: params.threadId,
           kind: 'command-approval',
-          negativeDecision: negativeDecision(params.availableDecisions),
           requestId: request.id,
         });
         this.emit({
@@ -1850,7 +1915,6 @@ export class AppServerClient implements RemoteAppClient {
         this.pendingServerRequests.set(request.id, {
           chatId: params.threadId,
           kind: 'file-change-approval',
-          negativeDecision: 'decline',
           requestId: request.id,
         });
         this.emit({
@@ -1909,7 +1973,6 @@ export class AppServerClient implements RemoteAppClient {
         this.pendingServerRequests.set(request.id, {
           chatId: params.conversationId,
           kind: 'legacy-command-approval',
-          negativeDecision: 'denied',
           requestId: request.id,
         });
         this.emit({
@@ -1933,7 +1996,6 @@ export class AppServerClient implements RemoteAppClient {
         this.pendingServerRequests.set(request.id, {
           chatId: params.conversationId,
           kind: 'legacy-apply-patch-approval',
-          negativeDecision: 'denied',
           requestId: request.id,
         });
         this.emit({

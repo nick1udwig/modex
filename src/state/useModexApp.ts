@@ -109,6 +109,18 @@ const clearInteractionForChat = (
   return next;
 };
 
+const clearInteractionRequest = (
+  interactions: Record<string, InteractionRequest | undefined>,
+  request: Pick<InteractionRequest, 'chatId' | 'requestId' | 'turnId'>,
+) => {
+  const activeRequest = interactions[request.chatId];
+  if (!activeRequest || activeRequest.requestId !== request.requestId || activeRequest.turnId !== request.turnId) {
+    return interactions;
+  }
+
+  return clearInteractionForChat(interactions, request.chatId);
+};
+
 const shouldMarkUnreadCompletion = (
   current: ModexState,
   chatId: string,
@@ -277,7 +289,14 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
     case 'interaction-cleared':
       return {
         ...current,
-        interactionByChatId: clearInteractionForChat(current.interactionByChatId, event.chatId),
+        interactionByChatId:
+          event.requestId === undefined || event.turnId === undefined
+            ? clearInteractionForChat(current.interactionByChatId, event.chatId)
+            : clearInteractionRequest(current.interactionByChatId, {
+                chatId: event.chatId,
+                requestId: event.requestId,
+                turnId: event.turnId,
+              }),
       };
 
     case 'error':
@@ -713,7 +732,7 @@ export const useModexApp = (client: RemoteAppClient) => {
       setState((current) => ({
         ...current,
         error: null,
-        interactionByChatId: clearInteractionForChat(current.interactionByChatId, activeRequest.chatId),
+        interactionByChatId: clearInteractionRequest(current.interactionByChatId, activeRequest),
       }));
     } catch (error) {
       setState((current) => ({
@@ -734,7 +753,7 @@ export const useModexApp = (client: RemoteAppClient) => {
       setState((current) => ({
         ...current,
         error: null,
-        interactionByChatId: clearInteractionForChat(current.interactionByChatId, activeRequest.chatId),
+        interactionByChatId: clearInteractionRequest(current.interactionByChatId, activeRequest),
       }));
     } catch (error) {
       setState((current) => ({

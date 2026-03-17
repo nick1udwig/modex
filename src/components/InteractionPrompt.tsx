@@ -63,6 +63,22 @@ export const InteractionPrompt = ({
             Yes
           </button>
 
+          {request.execPolicyAmendment ? (
+            <button
+              className="interaction-request__button interaction-request__button--secondary"
+              type="button"
+              onClick={() =>
+                onApprovalDecision({
+                  acceptWithExecpolicyAmendment: {
+                    execpolicy_amendment: request.execPolicyAmendment ?? [],
+                  },
+                })
+              }
+            >
+              Allow similar commands
+            </button>
+          ) : null}
+
           {request.allowSessionDecision ? (
             <button
               className="interaction-request__button interaction-request__button--secondary"
@@ -73,13 +89,25 @@ export const InteractionPrompt = ({
             </button>
           ) : null}
 
-          <button
-            className="interaction-request__button interaction-request__button--danger"
-            type="button"
-            onClick={() => onApprovalDecision('decline')}
-          >
-            No
-          </button>
+          {request.allowDeclineDecision ? (
+            <button
+              className="interaction-request__button interaction-request__button--danger"
+              type="button"
+              onClick={() => onApprovalDecision('decline')}
+            >
+              No
+            </button>
+          ) : null}
+
+          {request.allowCancelDecision ? (
+            <button
+              className="interaction-request__button interaction-request__button--ghost"
+              type="button"
+              onClick={() => onApprovalDecision('cancel')}
+            >
+              Cancel
+            </button>
+          ) : null}
         </div>
       </div>
     );

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildCommandApprovalRequest,
   buildInitializeParams,
   flattenUserInputs,
   isAppServerConnectionClosedError,
@@ -12,6 +13,39 @@ import {
 
 test('buildInitializeParams opts into experimental API features', () => {
   assert.equal(buildInitializeParams().capabilities.experimentalApi, true);
+});
+
+test('buildCommandApprovalRequest preserves available decisions and proposed amendments', () => {
+  assert.deepEqual(
+    buildCommandApprovalRequest(42, {
+      additionalPermissions: {
+        fileSystem: {
+          write: ['/workspace'],
+        },
+      },
+      availableDecisions: ['accept', 'acceptForSession', { acceptWithExecpolicyAmendment: {} }, 'decline', 'cancel'],
+      command: 'npm test',
+      cwd: '/workspace',
+      itemId: 'item-1',
+      proposedExecpolicyAmendment: ['npm', 'test'],
+      reason: 'Run the project test suite.',
+      threadId: 'chat-1',
+      turnId: 'turn-1',
+    }),
+    {
+      allowCancelDecision: true,
+      allowDeclineDecision: true,
+      allowSessionDecision: true,
+      chatId: 'chat-1',
+      detailLines: ['Command: npm test', 'Directory: /workspace', 'Writable roots: /workspace'],
+      execPolicyAmendment: ['npm', 'test'],
+      kind: 'approval',
+      message: 'Run the project test suite.',
+      requestId: 42,
+      title: 'Command approval',
+      turnId: 'turn-1',
+    },
+  );
 });
 
 test('flattenUserInputs preserves text and labels non-text inputs', () => {
