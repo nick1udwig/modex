@@ -53,6 +53,9 @@ const MIN_AUDIO_COMMIT_MS = 100;
 const TRANSCRIPTION_DRAIN_IDLE_MS = 2_000;
 const TRANSCRIPTION_DRAIN_MAX_MS = 12_000;
 
+const isEmptyAudioBufferCommitError = (message?: string) =>
+  typeof message === 'string' && message.toLowerCase().includes('buffer too small');
+
 const composeTranscript = (order: string[], items: Map<string, string>) => {
   const seen = new Set<string>();
   const ordered = order
@@ -372,6 +375,11 @@ export const useRealtimeTranscription = () => {
         }
 
         if (payload.type === 'error') {
+          if (drainingRef.current && isEmptyAudioBufferCommitError(payload.error?.message)) {
+            finishSession(publishCompletedResultRef.current);
+            return;
+          }
+
           setError(payload.error?.message ?? 'Voice transcription failed.');
           finishSession(publishCompletedResultRef.current);
           return;
