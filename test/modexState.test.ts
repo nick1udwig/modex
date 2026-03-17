@@ -4,6 +4,7 @@ import type { ChatSummary, ChatThread } from '../src/app/types.ts';
 import {
   defaultOpenTabs,
   ensureTab,
+  mergeBootstrapThread,
   mergeThreadSummary,
   setTabStatusIfOpen,
   setTabUnreadIfOpen,
@@ -144,4 +145,105 @@ test('mergeThreadSummary refreshes cached metadata without discarding messages',
     title: 'Fresh summary title',
     updatedAt: '2026-03-16T10:05:00.000Z',
   });
+});
+
+test('mergeBootstrapThread preserves optimistic or streamed messages that arrived after reopen', () => {
+  const hydrated: ChatThread = {
+    activity: [],
+    cwd: '/workspace/live',
+    id: 'chat-a',
+    messages: [
+      {
+        content: 'Earlier reply',
+        createdAt: '2026-03-17T12:00:00.000Z',
+        id: 'msg-1',
+        role: 'assistant',
+        turnId: 'turn-1',
+      },
+    ],
+    preview: 'Earlier reply',
+    status: 'idle',
+    title: 'Chat A',
+    tokenUsageLabel: null,
+    updatedAt: '2026-03-17T12:01:00.000Z',
+  };
+
+  const current: ChatThread = {
+    ...hydrated,
+    activity: [],
+    messages: [
+      ...hydrated.messages,
+      {
+        content: 'Follow-up question',
+        createdAt: '2026-03-17T12:01:05.000Z',
+        id: 'optimistic-1',
+        role: 'user',
+        turnId: null,
+      },
+      {
+        content: 'Working on it',
+        createdAt: '2026-03-17T12:01:06.000Z',
+        id: 'assistant-live',
+        role: 'assistant',
+        turnId: null,
+      },
+    ],
+    preview: 'Working on it',
+    status: 'running',
+    updatedAt: '2026-03-17T12:01:00.000Z',
+  };
+
+  assert.deepEqual(mergeBootstrapThread(hydrated, current), {
+    ...hydrated,
+    activity: current.activity,
+    messages: current.messages,
+    preview: 'Working on it',
+    status: 'running',
+    tokenUsageLabel: null,
+    updatedAt: '2026-03-17T12:01:00.000Z',
+  });
+});
+
+test('mergeBootstrapThread prefers hydrated backend state when cached data is older and fully synced', () => {
+  const current: ChatThread = {
+    activity: [],
+    cwd: '/workspace/cached',
+    id: 'chat-a',
+    messages: [
+      {
+        content: 'Old cached reply',
+        createdAt: '2026-03-17T11:59:00.000Z',
+        id: 'msg-old',
+        role: 'assistant',
+        turnId: 'turn-1',
+      },
+    ],
+    preview: 'Old cached reply',
+    status: 'running',
+    title: 'Cached title',
+    tokenUsageLabel: null,
+    updatedAt: '2026-03-17T11:59:00.000Z',
+  };
+
+  const hydrated: ChatThread = {
+    activity: [],
+    cwd: '/workspace/live',
+    id: 'chat-a',
+    messages: [
+      {
+        content: 'Fresh backend reply',
+        createdAt: '2026-03-17T12:02:00.000Z',
+        id: 'msg-fresh',
+        role: 'assistant',
+        turnId: 'turn-2',
+      },
+    ],
+    preview: 'Fresh backend reply',
+    status: 'idle',
+    title: 'Live title',
+    tokenUsageLabel: null,
+    updatedAt: '2026-03-17T12:02:00.000Z',
+  };
+
+  assert.deepEqual(mergeBootstrapThread(hydrated, current), hydrated);
 });

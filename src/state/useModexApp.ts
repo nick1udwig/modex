@@ -14,6 +14,7 @@ import {
   appendMessageDelta,
   defaultOpenTabs,
   ensureTab,
+  mergeBootstrapThread,
   mergeThreadSummary,
   replaceOrAppendMessage,
   setTabStatusIfOpen,
@@ -428,17 +429,83 @@ export const useModexApp = (client: RemoteAppClient) => {
           chatSettingsByChatId[thread.id] = inferSettings(thread, chatSettingsByChatId[thread.id]);
         });
 
-        setState({
-          activeChatId,
-          attachmentsByChatId: {},
-          chatMap,
-          chatSettingsByChatId,
-          chats: hydratedChats,
-          draftsByChatId: workspace?.draftsByChatId ?? {},
-          error: null,
-          interactionByChatId: {},
-          loading: false,
-          openTabs,
+        setState((current) => {
+          const mergedChatMap = {
+            ...chatMap,
+          };
+
+          Object.entries(current.chatMap).forEach(([chatId, thread]) => {
+            mergedChatMap[chatId] = mergeBootstrapThread(mergedChatMap[chatId] ?? thread, thread);
+          });
+
+          const mergedChats = Object.values(mergedChatMap).reduce(
+            updateChatSummary,
+            mergeSummaryLists(hydratedChats, current.chats),
+          );
+          const summaryByChatId = new Map(
+            mergedChats.map((chat) => [chat.id, chat] satisfies [string, ChatSummary]),
+          );
+          const mergedOpenTabs = [...current.openTabs, ...openTabs]
+            .reduce<typeof current.openTabs>((tabs, tab) => {
+              if (tabs.some((entry) => entry.chatId === tab.chatId)) {
+                return tabs.map((entry) =>
+                  entry.chatId === tab.chatId
+                    ? {
+                        ...entry,
+                        hasUnreadCompletion: entry.hasUnreadCompletion || tab.hasUnreadCompletion,
+                        status: summaryByChatId.get(tab.chatId)?.status ?? entry.status,
+                      }
+                    : entry,
+                );
+              }
+
+              return [
+                ...tabs,
+                {
+                  chatId: tab.chatId,
+                  hasUnreadCompletion: tab.hasUnreadCompletion,
+                  status: summaryByChatId.get(tab.chatId)?.status ?? tab.status,
+                },
+              ];
+            }, [])
+            .filter((tab) => summaryByChatId.has(tab.chatId));
+          const preservedOpenTabs = current.openTabs.filter((tab) => summaryByChatId.has(tab.chatId));
+          const nextOpenTabs =
+            mergedOpenTabs.length > 0
+              ? mergedOpenTabs
+              : preservedOpenTabs.length > 0
+                ? preservedOpenTabs
+                : defaultOpenTabs(mergedChats);
+          const nextChatSettingsByChatId = {
+            ...chatSettingsByChatId,
+            ...current.chatSettingsByChatId,
+          };
+
+          Object.values(mergedChatMap).forEach((thread) => {
+            nextChatSettingsByChatId[thread.id] = inferSettings(thread, nextChatSettingsByChatId[thread.id]);
+          });
+          const nextActiveChatId =
+            (current.activeChatId && summaryByChatId.has(current.activeChatId)
+              ? current.activeChatId
+              : activeChatId && summaryByChatId.has(activeChatId)
+                ? activeChatId
+                : nextOpenTabs[0]?.chatId ?? mergedChats[0]?.id ?? null);
+
+          return {
+            activeChatId: nextActiveChatId,
+            attachmentsByChatId: current.attachmentsByChatId,
+            chatMap: mergedChatMap,
+            chatSettingsByChatId: nextChatSettingsByChatId,
+            chats: mergedChats,
+            draftsByChatId: {
+              ...(workspace?.draftsByChatId ?? {}),
+              ...current.draftsByChatId,
+            },
+            error: current.error,
+            interactionByChatId: current.interactionByChatId,
+            loading: false,
+            openTabs: nextOpenTabs,
+          };
         });
       } catch (error) {
         if (!cancelled) {

@@ -9,6 +9,32 @@ export const mergeThreadSummary = (thread: ChatThread, summary: ChatSummary): Ch
   updatedAt: summary.updatedAt,
 });
 
+const hasTransientLocalMessages = (thread: Pick<ChatThread, 'messages'>) =>
+  thread.messages.some((message) => message.id.startsWith('optimistic-') || (message.role === 'assistant' && message.turnId === null));
+
+export const mergeBootstrapThread = (hydrated: ChatThread, current?: ChatThread): ChatThread => {
+  if (!current) {
+    return hydrated;
+  }
+
+  const keepCurrentLiveState =
+    hasTransientLocalMessages(current) || current.updatedAt.localeCompare(hydrated.updatedAt) > 0;
+
+  if (!keepCurrentLiveState) {
+    return hydrated;
+  }
+
+  return {
+    ...hydrated,
+    activity: current.activity,
+    messages: current.messages,
+    preview: current.preview,
+    status: current.status,
+    tokenUsageLabel: current.tokenUsageLabel ?? hydrated.tokenUsageLabel,
+    updatedAt: current.updatedAt,
+  };
+};
+
 export const ensureTab = (
   tabs: ChatTab[],
   chatId: string,
