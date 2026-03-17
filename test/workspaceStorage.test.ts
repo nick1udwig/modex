@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { sanitizeWorkspaceSnapshot } from '../src/state/workspaceStorage.ts';
 
-test('sanitizeWorkspaceSnapshot filters invalid chats and restores active tabs', () => {
+test('sanitizeWorkspaceSnapshot preserves recoverable local chats while restoring valid tabs', () => {
   const snapshot = sanitizeWorkspaceSnapshot(
     {
       activeChatId: 'chat-b',
@@ -21,9 +21,10 @@ test('sanitizeWorkspaceSnapshot filters invalid chats and restores active tabs',
     cachedChats: [],
     cachedThreadsByChatId: {},
     chatSettingsByChatId: {},
-    openChatIds: ['chat-a', 'chat-b'],
+    openChatIds: ['chat-a', 'chat-b', 'missing'],
     draftsByChatId: {
       'chat-a': 'draft a',
+      missing: 'ignore me',
     },
   });
 });
@@ -151,4 +152,42 @@ test('sanitizeWorkspaceSnapshot restores cached chats and hydrated threads for i
   assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.messages[0]?.turnId, 'turn-1');
   assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.activity[0]?.id, 'activity-0');
   assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.activity[0]?.kind, 'commentary');
+});
+
+test('sanitizeWorkspaceSnapshot preserves the active cached chat when the server list omits a new empty thread', () => {
+  const snapshot = sanitizeWorkspaceSnapshot(
+    {
+      activeChatId: 'chat-new',
+      cachedChats: [
+        {
+          cwd: '/workspace/new',
+          id: 'chat-new',
+          preview: 'Start a new request',
+          status: 'idle',
+          title: 'New session',
+          updatedAt: '2026-03-17T09:30:00.000Z',
+        },
+      ],
+      cachedThreadsByChatId: {
+        'chat-new': {
+          activity: [],
+          cwd: '/workspace/new',
+          id: 'chat-new',
+          messages: [],
+          preview: 'Start a new request',
+          status: 'idle',
+          title: 'New session',
+          tokenUsageLabel: null,
+          updatedAt: '2026-03-17T09:30:00.000Z',
+        },
+      },
+      openChatIds: ['chat-new'],
+    },
+    ['chat-existing'],
+  );
+
+  assert.equal(snapshot.activeChatId, 'chat-new');
+  assert.deepEqual(snapshot.openChatIds, ['chat-new']);
+  assert.equal(snapshot.cachedChats[0]?.id, 'chat-new');
+  assert.equal(snapshot.cachedThreadsByChatId['chat-new']?.id, 'chat-new');
 });

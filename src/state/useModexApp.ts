@@ -68,6 +68,21 @@ const bootstrapWorkspace = () => {
 const compactText = (text: string) => text.replace(/\s+/g, ' ').trim();
 const previewFromContent = (text: string) => compactText(text) || 'Start a new request';
 
+const mergeSummaryLists = (...lists: ChatSummary[][]) => {
+  const summaries = new Map<string, ChatSummary>();
+
+  lists.forEach((list) => {
+    list.forEach((summary) => {
+      const current = summaries.get(summary.id);
+      if (!current || current.updatedAt.localeCompare(summary.updatedAt) < 0) {
+        summaries.set(summary.id, summary);
+      }
+    });
+  });
+
+  return [...summaries.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+};
+
 const inferSettings = (
   thread: ChatThread,
   existing?: ChatRuntimeSettings,
@@ -337,7 +352,10 @@ export const useModexApp = (client: RemoteAppClient) => {
           return;
         }
 
-        if (chats.length === 0) {
+        const workspace = loadWorkspaceSnapshot(chats.map((chat) => chat.id));
+        const seedChats = mergeSummaryLists(chats, workspace?.cachedChats ?? []);
+
+        if (seedChats.length === 0) {
           const created = await client.createChat();
           if (cancelled) {
             return;
@@ -362,22 +380,23 @@ export const useModexApp = (client: RemoteAppClient) => {
           return;
         }
 
-        const workspace = loadWorkspaceSnapshot(chats.map((chat) => chat.id));
         const openTabs = workspace
           ? workspace.openChatIds.map((chatId) => ({
               chatId,
               hasUnreadCompletion: false,
               status:
-                chats.find((chat) => chat.id === chatId)?.status ??
+                seedChats.find((chat) => chat.id === chatId)?.status ??
                 workspace.cachedThreadsByChatId[chatId]?.status ??
                 'idle',
             }))
-          : defaultOpenTabs(chats);
+          : defaultOpenTabs(seedChats);
         const activeChatId = workspace
-          ? workspace.activeChatId ?? openTabs[0]?.chatId ?? null
-          : openTabs[0]?.chatId ?? chats[0].id;
+          ? workspace.activeChatId ?? openTabs[0]?.chatId ?? seedChats[0]?.id ?? null
+          : openTabs[0]?.chatId ?? seedChats[0]?.id ?? null;
 
-        const chatIdsToHydrate = [...new Set(openTabs.map((tab) => tab.chatId))];
+        const chatIdsToHydrate = [
+          ...new Set([activeChatId, ...openTabs.map((tab) => tab.chatId)].filter((chatId): chatId is string => Boolean(chatId))),
+        ];
         const hydratedThreads = (
           await Promise.allSettled(chatIdsToHydrate.map((chatId) => client.getChat(chatId)))
         )
@@ -387,7 +406,7 @@ export const useModexApp = (client: RemoteAppClient) => {
           return;
         }
 
-        const hydratedChats = hydratedThreads.reduce(updateChatSummary, chats);
+        const hydratedChats = hydratedThreads.reduce(updateChatSummary, seedChats);
         const summaryByChatId = new Map(hydratedChats.map((chat) => [chat.id, chat] satisfies [string, ChatSummary]));
         const cachedThreads = Object.fromEntries(
           Object.entries(workspace?.cachedThreadsByChatId ?? {}).map(([chatId, thread]) => {

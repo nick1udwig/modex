@@ -46,6 +46,8 @@ const dedupeIds = (chatIds: string[]) => {
   });
 };
 
+const isStoredChatId = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+
 const sanitizeRoots = (roots: unknown) => {
   if (!Array.isArray(roots)) {
     return [];
@@ -250,11 +252,53 @@ const deriveValidChatIds = (snapshot: RawWorkspaceSnapshot) => {
   return [...ids];
 };
 
+const deriveRecoverableChatIds = (snapshot: RawWorkspaceSnapshot) => {
+  const cachedSummaryIds = new Set(
+    Array.isArray(snapshot.cachedChats)
+      ? snapshot.cachedChats.flatMap((value) => {
+          const summary = sanitizeChatSummary(value);
+          return summary ? [summary.id] : [];
+        })
+      : [],
+  );
+
+  const hasLocalState = (chatId: string) => {
+    if ((snapshot.cachedThreadsByChatId ?? {})[chatId] !== undefined) {
+      return true;
+    }
+
+    if (cachedSummaryIds.has(chatId)) {
+      return true;
+    }
+
+    const draft = (snapshot.draftsByChatId ?? {})[chatId];
+    if (typeof draft === 'string' && draft.trim().length > 0) {
+      return true;
+    }
+
+    const settings = (snapshot.chatSettingsByChatId ?? {})[chatId];
+    return typeof settings === 'object' && settings !== null;
+  };
+
+  const ids = new Set<string>();
+  if (isStoredChatId(snapshot.activeChatId) && hasLocalState(snapshot.activeChatId)) {
+    ids.add(snapshot.activeChatId);
+  }
+
+  (snapshot.openChatIds ?? []).forEach((chatId) => {
+    if (isStoredChatId(chatId) && hasLocalState(chatId)) {
+      ids.add(chatId);
+    }
+  });
+
+  return [...ids];
+};
+
 export const sanitizeWorkspaceSnapshot = (
   snapshot: RawWorkspaceSnapshot,
   validChatIds: string[] = deriveValidChatIds(snapshot),
 ): WorkspaceSnapshot => {
-  const validIdSet = new Set(validChatIds);
+  const validIdSet = new Set([...validChatIds, ...deriveRecoverableChatIds(snapshot)]);
   const openChatIds = dedupeIds(snapshot.openChatIds ?? []).filter((chatId) => validIdSet.has(chatId));
   const activeChatId =
     snapshot.activeChatId && validIdSet.has(snapshot.activeChatId) ? snapshot.activeChatId : null;

@@ -31,6 +31,7 @@ const NOTIFICATION_OPTOUTS = [
   'item/commandExecution/terminalInteraction',
 ] as const;
 const APP_SERVER_RECONNECT_DELAYS_MS = [300, 1_000, 2_500, 5_000] as const;
+const APP_SERVER_THREAD_REFRESH_MS = 2_000;
 const TURN_RECOVERY_POLL_MS = 1_000;
 const TURN_RECOVERY_TIMEOUT_MS = 10 * 60 * 1_000;
 
@@ -759,6 +760,70 @@ const buildUserInputRequest = (
 
 const normalizeStatus = (status: RawThreadStatus): ChatStatus => (status.type === 'active' ? 'running' : 'idle');
 
+const latestTurn = (thread: Pick<RawThread, 'turns'>) => thread.turns[thread.turns.length - 1] ?? null;
+
+export const findActiveTurnId = (thread: Pick<RawThread, 'turns'>) =>
+  [...thread.turns].reverse().find((turn) => turn.status === 'inProgress')?.id ?? null;
+
+export const latestTurnFailure = (thread: Pick<RawThread, 'turns'>) => {
+  const turn = latestTurn(thread);
+  if (!turn || turn.status !== 'failed') {
+    return null;
+  }
+
+  return {
+    message: turn.error?.message ?? 'The app-server turn failed',
+    turnId: turn.id,
+  };
+};
+
+const hasTransientLocalMessages = (thread: Pick<ChatThread, 'messages'>) =>
+  thread.messages.some((message) => message.id.startsWith('optimistic-') || (message.role === 'assistant' && message.turnId === null));
+
+const summaryDiffersFromThread = (
+  summary: Pick<ChatSummary, 'cwd' | 'preview' | 'status' | 'title' | 'updatedAt'>,
+  thread: Pick<ChatThread, 'cwd' | 'preview' | 'status' | 'title' | 'updatedAt'>,
+) =>
+  summary.cwd !== thread.cwd ||
+  summary.preview !== thread.preview ||
+  summary.status !== thread.status ||
+  summary.title !== thread.title ||
+  summary.updatedAt !== thread.updatedAt;
+
+export const collectThreadIdsToRefresh = (
+  runningChatIds: Iterable<string>,
+  summaries: Iterable<Pick<ChatSummary, 'cwd' | 'id' | 'preview' | 'status' | 'title' | 'updatedAt'>>,
+  threads: Iterable<Pick<ChatThread, 'cwd' | 'id' | 'messages' | 'preview' | 'status' | 'title' | 'updatedAt'>>,
+) => {
+  const ids = new Set<string>();
+  const summaryById = new Map<string, Pick<ChatSummary, 'cwd' | 'id' | 'preview' | 'status' | 'title' | 'updatedAt'>>();
+
+  for (const chatId of runningChatIds) {
+    ids.add(chatId);
+  }
+
+  for (const summary of summaries) {
+    summaryById.set(summary.id, summary);
+    if (summary.status === 'running') {
+      ids.add(summary.id);
+    }
+  }
+
+  for (const thread of threads) {
+    const summary = summaryById.get(thread.id);
+    if (thread.status === 'running' || hasTransientLocalMessages(thread)) {
+      ids.add(thread.id);
+      continue;
+    }
+
+    if (summary && summaryDiffersFromThread(summary, thread)) {
+      ids.add(thread.id);
+    }
+  }
+
+  return [...ids];
+};
+
 const isUserMessageItem = (
   item: RawThreadItem,
 ): item is Extract<RawThreadItem, { type: 'userMessage' }> => item.type === 'userMessage' && 'content' in item;
@@ -1327,22 +1392,28 @@ export class AppServerClient implements RemoteAppClient {
   private connectionPromise: Promise<AppServerConnection> | null = null;
   private listeners = new Set<(event: RemoteThreadEvent) => void>();
   private pendingServerRequests = new Map<JsonRpcId, PendingServerRequest>();
+  private reportedFailureTurnIds = new Map<string, string>();
   private reconnectAttempt = 0;
   private reconnectTimerId: ReturnType<typeof globalThis.setTimeout> | null = null;
   private refreshingThreadIds = new Set<string>();
   private runningTurnIds = new Map<string, string>();
+  private threadRefreshTimerId: ReturnType<typeof globalThis.setTimeout> | null = null;
   private summaryCache = new Map<string, ChatSummary>();
   private threadCache = new Map<string, ChatThread>();
   private reconnectSignalsBound = false;
+  private wasBackgrounded = false;
   private readonly handleVisibilityChange = () => {
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      this.wasBackgrounded = true;
       return;
     }
 
-    this.nudgeReconnect();
+    const shouldRestartConnection = this.wasBackgrounded;
+    this.wasBackgrounded = false;
+    this.handleForegroundResume(shouldRestartConnection);
   };
   private readonly handleReconnectSignal = () => {
-    this.nudgeReconnect();
+    this.handleForegroundResume(true);
   };
 
   constructor(config: AppServerConfig = appServerConfig()) {
@@ -1369,6 +1440,7 @@ export class AppServerClient implements RemoteAppClient {
       if (this.listeners.size === 0) {
         this.unbindReconnectSignals();
         this.clearReconnectTimer();
+        this.clearThreadRefreshTimer();
       }
     };
   }
@@ -1463,6 +1535,7 @@ export class AppServerClient implements RemoteAppClient {
     }
 
     this.runningTurnIds.set(payload.chatId, started.turn.id);
+    this.syncThreadRefreshTimer();
     try {
       await connection.waitForTurnCompletion(payload.chatId, started.turn.id);
       return await this.getChat(payload.chatId);
@@ -1477,16 +1550,48 @@ export class AppServerClient implements RemoteAppClient {
 
   async interruptTurn(chatId: string) {
     const connection = await this.ensureConnection();
-    const turnId = this.runningTurnIds.get(chatId);
+    let turnId: string | null = this.runningTurnIds.get(chatId) ?? null;
     if (!turnId) {
-      throw new Error('No active run to stop.');
+      const rawThread = await this.readRawThread(chatId);
+      this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
+      turnId = findActiveTurnId(rawThread);
+      if (!turnId) {
+        return;
+      }
     }
 
-    await connection.request<Record<string, never>>('turn/interrupt', {
-      threadId: chatId,
-      turnId,
-    });
-    this.clearPendingRequestsForChat(chatId);
+    try {
+      await connection.request<Record<string, never>>('turn/interrupt', {
+        threadId: chatId,
+        turnId,
+      });
+      this.clearPendingRequestsForChat(chatId);
+    } catch (error) {
+      let refreshedTurnId: string | null;
+
+      try {
+        const rawThread = await this.readRawThread(chatId);
+        this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
+        refreshedTurnId = findActiveTurnId(rawThread);
+      } catch {
+        throw error;
+      }
+
+      if (!refreshedTurnId) {
+        return;
+      }
+
+      if (refreshedTurnId === turnId) {
+        throw error;
+      }
+
+      this.runningTurnIds.set(chatId, refreshedTurnId);
+      await connection.request<Record<string, never>>('turn/interrupt', {
+        threadId: chatId,
+        turnId: refreshedTurnId,
+      });
+      this.clearPendingRequestsForChat(chatId);
+    }
   }
 
   async respondToApproval(request: ApprovalRequest, decision: ApprovalDecision) {
@@ -1624,10 +1729,12 @@ export class AppServerClient implements RemoteAppClient {
             this.connectionPromise = null;
           }
 
-          this.pendingServerRequests.clear();
+          this.clearPendingRequests();
+          this.syncThreadRefreshTimer();
           this.scheduleReconnect();
         });
 
+        this.syncThreadRefreshTimer();
         return connection;
       })
       .catch((error) => {
@@ -1668,6 +1775,75 @@ export class AppServerClient implements RemoteAppClient {
 
     globalThis.clearTimeout(this.reconnectTimerId);
     this.reconnectTimerId = null;
+  }
+
+  private clearThreadRefreshTimer() {
+    if (this.threadRefreshTimerId === null) {
+      return;
+    }
+
+    globalThis.clearTimeout(this.threadRefreshTimerId);
+    this.threadRefreshTimerId = null;
+  }
+
+  private syncThreadRefreshTimer() {
+    if (this.listeners.size === 0) {
+      this.clearThreadRefreshTimer();
+      return;
+    }
+
+    if (this.collectThreadIdsToRefresh().length === 0) {
+      this.clearThreadRefreshTimer();
+      return;
+    }
+
+    if (this.threadRefreshTimerId !== null) {
+      return;
+    }
+
+    this.threadRefreshTimerId = globalThis.setTimeout(() => {
+      this.threadRefreshTimerId = null;
+      void this.refreshTrackedThreads();
+    }, APP_SERVER_THREAD_REFRESH_MS);
+  }
+
+  private async refreshTrackedThreads() {
+    const threadIds = this.collectThreadIdsToRefresh();
+    if (threadIds.length === 0) {
+      this.syncThreadRefreshTimer();
+      return;
+    }
+
+    await Promise.allSettled(threadIds.map((threadId) => this.refreshThread(threadId, { suppressError: true })));
+    this.syncThreadRefreshTimer();
+  }
+
+  private handleForegroundResume(forceRestart = false) {
+    if (this.connection && (forceRestart || this.hasPotentiallyStaleSessionState())) {
+      this.restartConnection();
+      return;
+    }
+
+    this.nudgeReconnect();
+  }
+
+  private hasPotentiallyStaleSessionState() {
+    return this.collectThreadIdsToRefresh().length > 0;
+  }
+
+  private restartConnection() {
+    if (!this.connection) {
+      this.nudgeReconnect();
+      return;
+    }
+
+    const connection = this.connection;
+    this.connection = null;
+    this.connectionPromise = null;
+    this.clearPendingRequests();
+    this.clearThreadRefreshTimer();
+    connection.close();
+    this.scheduleReconnect(true);
   }
 
   private nudgeReconnect() {
@@ -1721,7 +1897,9 @@ export class AppServerClient implements RemoteAppClient {
           return;
         }
 
+        this.reportedFailureTurnIds.delete(params.threadId);
         this.runningTurnIds.set(params.threadId, params.turn.id);
+        this.syncThreadRefreshTimer();
         return;
       }
 
@@ -1758,6 +1936,7 @@ export class AppServerClient implements RemoteAppClient {
           status,
           type: 'status',
         });
+        this.syncThreadRefreshTimer();
         return;
       }
 
@@ -1878,6 +2057,7 @@ export class AppServerClient implements RemoteAppClient {
         this.clearPendingRequestsForChat(params.threadId);
 
         if (params.turn.status === 'failed') {
+          this.reportedFailureTurnIds.set(params.threadId, params.turn.id);
           this.emit({
             chatId: params.threadId,
             message: params.turn.error?.message ?? 'The app-server turn failed',
@@ -1885,6 +2065,7 @@ export class AppServerClient implements RemoteAppClient {
           });
         }
 
+        this.syncThreadRefreshTimer();
         void this.refreshThread(params.threadId);
         return;
       }
@@ -2079,9 +2260,41 @@ export class AppServerClient implements RemoteAppClient {
     };
   }
 
-  private storeMappedThread(rawThread: RawThread) {
+  private collectThreadIdsToRefresh() {
+    return collectThreadIdsToRefresh(this.runningTurnIds.keys(), this.summaryCache.values(), this.threadCache.values());
+  }
+
+  private storeMappedThread(rawThread: RawThread, options?: { reportRecoveredFailure?: boolean }) {
+    const activeTurnId = findActiveTurnId(rawThread);
+    if (activeTurnId) {
+      this.runningTurnIds.set(rawThread.id, activeTurnId);
+      this.reportedFailureTurnIds.delete(rawThread.id);
+    } else {
+      this.runningTurnIds.delete(rawThread.id);
+      this.clearPendingRequestsForChat(rawThread.id);
+      if (!latestTurnFailure(rawThread)) {
+        this.reportedFailureTurnIds.delete(rawThread.id);
+      }
+    }
+
     const thread = this.mergeThread(mapThread(rawThread));
     this.storeThread(thread);
+
+    const failure = latestTurnFailure(rawThread);
+    if (
+      options?.reportRecoveredFailure &&
+      failure &&
+      this.reportedFailureTurnIds.get(rawThread.id) !== failure.turnId
+    ) {
+      this.reportedFailureTurnIds.set(rawThread.id, failure.turnId);
+      this.emit({
+        chatId: rawThread.id,
+        message: failure.message,
+        type: 'error',
+      });
+    }
+
+    this.syncThreadRefreshTimer();
     return thread;
   }
 
@@ -2113,6 +2326,30 @@ export class AppServerClient implements RemoteAppClient {
         type: 'interaction-cleared',
       });
     }
+
+    this.syncThreadRefreshTimer();
+  }
+
+  private clearPendingRequests() {
+    if (this.pendingServerRequests.size === 0) {
+      return;
+    }
+
+    const chatIds = new Set<string>();
+    for (const request of this.pendingServerRequests.values()) {
+      chatIds.add(request.chatId);
+    }
+
+    this.pendingServerRequests.clear();
+
+    chatIds.forEach((chatId) => {
+      this.emit({
+        chatId,
+        type: 'interaction-cleared',
+      });
+    });
+
+    this.syncThreadRefreshTimer();
   }
 
   private storeSummary(summary: ChatSummary) {
@@ -2121,6 +2358,7 @@ export class AppServerClient implements RemoteAppClient {
       summary,
       type: 'summary',
     });
+    this.syncThreadRefreshTimer();
   }
 
   private storeThread(thread: ChatThread) {
@@ -2130,6 +2368,7 @@ export class AppServerClient implements RemoteAppClient {
       thread,
       type: 'thread',
     });
+    this.syncThreadRefreshTimer();
   }
 
   private async refreshThread(threadId: string, options?: { suppressError?: boolean }) {
@@ -2140,7 +2379,8 @@ export class AppServerClient implements RemoteAppClient {
     this.refreshingThreadIds.add(threadId);
 
     try {
-      await this.getChat(threadId);
+      const rawThread = await this.readRawThread(threadId);
+      this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
     } catch (error) {
       if (!options?.suppressError) {
         this.emit({
@@ -2160,26 +2400,8 @@ export class AppServerClient implements RemoteAppClient {
       this.storeSummary(summary);
     });
 
-    const activeThreadIds = new Set<string>();
-
-    this.runningTurnIds.forEach((_, chatId) => {
-      activeThreadIds.add(chatId);
-    });
-
-    this.summaryCache.forEach((summary) => {
-      if (summary.status === 'running') {
-        activeThreadIds.add(summary.id);
-      }
-    });
-
-    this.threadCache.forEach((thread) => {
-      if (thread.status === 'running') {
-        activeThreadIds.add(thread.id);
-      }
-    });
-
     await Promise.allSettled(
-      [...activeThreadIds].map((threadId) => this.refreshThread(threadId, { suppressError: true })),
+      this.collectThreadIdsToRefresh().map((threadId) => this.refreshThread(threadId, { suppressError: true })),
     );
   }
 
@@ -2189,7 +2411,7 @@ export class AppServerClient implements RemoteAppClient {
     while (Date.now() < deadline) {
       try {
         const rawThread = await this.readRawThread(chatId);
-        const thread = this.storeMappedThread(rawThread);
+        const thread = this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
         const turn = rawThread.turns.find((candidate) => candidate.id === turnId) ?? null;
 
         if (!turn) {

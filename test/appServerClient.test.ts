@@ -1,18 +1,209 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  AppServerClient,
   buildCommandApprovalRequest,
   buildInitializeParams,
+  collectThreadIdsToRefresh,
+  findActiveTurnId,
   flattenUserInputs,
   isAppServerConnectionClosedError,
   isAppServerTurnWaitTimeoutError,
+  latestTurnFailure,
   mapThread,
   mapThreadSummary,
   shouldResumeAfterTurnStartError,
 } from '../src/services/appServerClient.ts';
 
+const makeRawThread = (
+  overrides: Partial<{
+    id: string;
+    preview: string;
+    status: { type: 'notLoaded' | 'idle' | 'systemError' } | { activeFlags?: Array<'waitingOnApproval' | 'waitingOnUserInput'>; type: 'active' };
+    turns: Array<{
+      error?: { message: string } | null;
+      id: string;
+      items: Array<{
+        id: string;
+        type: string;
+      }>;
+      status: 'completed' | 'failed' | 'inProgress' | 'interrupted';
+    }>;
+  }> = {},
+) => ({
+  createdAt: 1_710_000_000,
+  cwd: '/workspace/project',
+  id: overrides.id ?? 'thr_test',
+  modelProvider: 'openai',
+  name: null,
+  preview: overrides.preview ?? 'Preview',
+  status: overrides.status ?? { type: 'idle' as const },
+  turns: overrides.turns ?? [],
+  updatedAt: 1_710_000_120,
+});
+
 test('buildInitializeParams opts into experimental API features', () => {
   assert.equal(buildInitializeParams().capabilities.experimentalApi, true);
+});
+
+test('collectThreadIdsToRefresh unions cached running sources without duplicates', () => {
+  assert.deepEqual(
+    collectThreadIdsToRefresh(
+      ['chat-running-turn', 'chat-shared'],
+      [
+        {
+          cwd: '/workspace/summary',
+          id: 'chat-summary',
+          preview: 'Running summary',
+          status: 'running' as const,
+          title: 'Summary',
+          updatedAt: '2026-03-17T00:00:00.000Z',
+        },
+        {
+          cwd: '/workspace/shared',
+          id: 'chat-shared',
+          preview: 'Shared summary',
+          status: 'running' as const,
+          title: 'Shared',
+          updatedAt: '2026-03-17T00:00:01.000Z',
+        },
+        {
+          cwd: '/workspace/idle',
+          id: 'chat-idle',
+          preview: 'Idle summary',
+          status: 'idle' as const,
+          title: 'Idle',
+          updatedAt: '2026-03-17T00:00:02.000Z',
+        },
+      ],
+      [
+        {
+          cwd: '/workspace/thread',
+          id: 'chat-thread',
+          messages: [],
+          preview: 'Running thread',
+          status: 'running' as const,
+          title: 'Thread',
+          updatedAt: '2026-03-17T00:00:03.000Z',
+        },
+        {
+          cwd: '/workspace/summary',
+          id: 'chat-summary',
+          messages: [],
+          preview: 'Running summary',
+          status: 'running' as const,
+          title: 'Summary',
+          updatedAt: '2026-03-17T00:00:00.000Z',
+        },
+        {
+          cwd: '/workspace/idle',
+          id: 'chat-idle-thread',
+          messages: [],
+          preview: 'Idle thread',
+          status: 'idle' as const,
+          title: 'Idle thread',
+          updatedAt: '2026-03-17T00:00:04.000Z',
+        },
+      ],
+    ),
+    ['chat-running-turn', 'chat-shared', 'chat-summary', 'chat-thread'],
+  );
+});
+
+test('collectThreadIdsToRefresh rehydrates stale cached threads when summary metadata or local placeholders differ', () => {
+  assert.deepEqual(
+    collectThreadIdsToRefresh(
+      [],
+      [
+        {
+          cwd: '/workspace/chat-a',
+          id: 'chat-a',
+          preview: 'Final backend reply',
+          status: 'idle' as const,
+          title: 'Chat A',
+          updatedAt: '2026-03-17T00:05:00.000Z',
+        },
+        {
+          cwd: '/workspace/chat-b',
+          id: 'chat-b',
+          preview: 'Still idle',
+          status: 'idle' as const,
+          title: 'Chat B',
+          updatedAt: '2026-03-17T00:05:00.000Z',
+        },
+      ],
+      [
+        {
+          cwd: '/workspace/chat-a',
+          id: 'chat-a',
+          messages: [],
+          preview: 'Partial streamed reply',
+          status: 'idle' as const,
+          title: 'Chat A',
+          updatedAt: '2026-03-17T00:04:00.000Z',
+        },
+        {
+          cwd: '/workspace/chat-b',
+          id: 'chat-b',
+          messages: [
+            {
+              content: 'Still sending locally',
+              createdAt: '2026-03-17T00:05:00.000Z',
+              id: 'optimistic-1',
+              role: 'user' as const,
+              turnId: null,
+            },
+          ],
+          preview: 'Still idle',
+          status: 'idle' as const,
+          title: 'Chat B',
+          updatedAt: '2026-03-17T00:05:00.000Z',
+        },
+      ],
+    ),
+    ['chat-a', 'chat-b'],
+  );
+});
+
+test('findActiveTurnId prefers the most recent in-progress turn', () => {
+  assert.equal(
+    findActiveTurnId(
+      makeRawThread({
+        turns: [
+          { id: 'turn-complete', items: [], status: 'completed' },
+          { id: 'turn-old-active', items: [], status: 'inProgress' },
+          { id: 'turn-new-active', items: [], status: 'inProgress' },
+        ],
+      }),
+    ),
+    'turn-new-active',
+  );
+});
+
+test('latestTurnFailure only reports the latest failed turn', () => {
+  assert.deepEqual(
+    latestTurnFailure(
+      makeRawThread({
+        turns: [
+          { id: 'turn-old-failed', items: [], status: 'failed', error: { message: 'Old failure' } },
+          { id: 'turn-latest-failed', items: [], status: 'failed', error: { message: 'Latest failure' } },
+        ],
+      }),
+    ),
+    { message: 'Latest failure', turnId: 'turn-latest-failed' },
+  );
+
+  assert.equal(
+    latestTurnFailure(
+      makeRawThread({
+        turns: [
+          { id: 'turn-failed', items: [], status: 'failed', error: { message: 'Old failure' } },
+          { id: 'turn-complete', items: [], status: 'completed' },
+        ],
+      }),
+    ),
+    null,
+  );
 });
 
 test('buildCommandApprovalRequest preserves available decisions and proposed amendments', () => {
@@ -269,4 +460,123 @@ test('isAppServerTurnWaitTimeoutError only matches turn wait timeouts', () => {
   assert.equal(isAppServerTurnWaitTimeoutError(new Error('Timed out waiting for the app-server to finish the turn')), true);
   assert.equal(isAppServerTurnWaitTimeoutError(new Error('App-server connection closed: ws://localhost:4222')), false);
   assert.equal(isAppServerTurnWaitTimeoutError(new Error('The app-server turn failed')), false);
+});
+
+test('interruptTurn reads the thread to recover a missing active turn id', async () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  const requests: Array<{ method: string; params: unknown }> = [];
+
+  (client as any).ensureConnection = async () => ({
+    request: async (method: string, params: unknown) => {
+      requests.push({ method, params });
+      return {};
+    },
+  });
+
+  (client as any).readRawThread = async () =>
+    makeRawThread({
+      id: 'chat-1',
+      status: { type: 'active', activeFlags: [] },
+      turns: [
+        { id: 'turn-complete', items: [], status: 'completed' },
+        { id: 'turn-active', items: [], status: 'inProgress' },
+      ],
+    });
+
+  await client.interruptTurn('chat-1');
+
+  assert.deepEqual(requests, [
+    {
+      method: 'turn/interrupt',
+      params: {
+        threadId: 'chat-1',
+        turnId: 'turn-active',
+      },
+    },
+  ]);
+});
+
+test('interruptTurn reconciles an already-idle thread and surfaces the recovered failure', async () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const events: Array<Record<string, unknown>> = [];
+
+  (client as any).emit = (event: Record<string, unknown>) => {
+    events.push(event);
+  };
+
+  (client as any).ensureConnection = async () => ({
+    request: async (method: string, params: unknown) => {
+      requests.push({ method, params });
+      return {};
+    },
+  });
+
+  (client as any).readRawThread = async () =>
+    makeRawThread({
+      id: 'chat-2',
+      status: { type: 'idle' },
+      turns: [
+        { id: 'turn-failed', items: [], status: 'failed', error: { message: 'The backend command timed out.' } },
+      ],
+    });
+
+  await client.interruptTurn('chat-2');
+
+  assert.deepEqual(requests, []);
+  assert.equal((client as any).runningTurnIds.has('chat-2'), false);
+  assert.ok(events.some((event) => event.type === 'thread'));
+  assert.ok(
+    events.some((event) => event.type === 'error' && event.message === 'The backend command timed out.'),
+  );
+});
+
+test('foreground resume forces a reconnect when a running thread may be stale', () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  let restarted = 0;
+  let nudged = 0;
+
+  (client as any).connection = {
+    close: () => undefined,
+  };
+  (client as any).summaryCache.set('chat-1', {
+    cwd: '/workspace/project',
+    id: 'chat-1',
+    preview: 'Running',
+    status: 'running',
+    title: 'Chat 1',
+    updatedAt: '2026-03-17T00:00:00.000Z',
+  });
+  (client as any).restartConnection = () => {
+    restarted += 1;
+  };
+  (client as any).nudgeReconnect = () => {
+    nudged += 1;
+  };
+
+  (client as any).handleForegroundResume();
+
+  assert.equal(restarted, 1);
+  assert.equal(nudged, 0);
+});
+
+test('foreground resume restarts an existing connection after the app was backgrounded', () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  let restarted = 0;
+  let nudged = 0;
+
+  (client as any).connection = {
+    close: () => undefined,
+  };
+  (client as any).restartConnection = () => {
+    restarted += 1;
+  };
+  (client as any).nudgeReconnect = () => {
+    nudged += 1;
+  };
+
+  (client as any).handleForegroundResume(true);
+
+  assert.equal(restarted, 1);
+  assert.equal(nudged, 0);
 });
