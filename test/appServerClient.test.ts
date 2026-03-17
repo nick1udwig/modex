@@ -191,6 +191,12 @@ test('mapThread preserves non-message activity for later inspection', () => {
         id: 'turn-activity',
         items: [
           {
+            id: 'commentary-1',
+            phase: 'commentary',
+            text: 'I am checking the failing snapshot before I patch it.',
+            type: 'agentMessage',
+          },
+          {
             id: 'plan-1',
             text: '1. Inspect the logs\\n2. Patch the config',
             type: 'plan',
@@ -238,6 +244,7 @@ test('mapThread preserves non-message activity for later inspection', () => {
       turnId: entry.turnId,
     })),
     [
+      { id: 'commentary-1', kind: 'commentary', status: 'completed', title: 'Agent update', turnId: 'turn-activity' },
       { id: 'plan-1', kind: 'plan', status: 'completed', title: 'Plan', turnId: 'turn-activity' },
       { id: 'reasoning-1', kind: 'reasoning', status: 'completed', title: 'Reasoning', turnId: 'turn-activity' },
       { id: 'command-1', kind: 'command', status: 'completed', title: 'npm test', turnId: 'turn-activity' },

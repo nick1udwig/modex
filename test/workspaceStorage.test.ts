@@ -96,6 +96,15 @@ test('sanitizeWorkspaceSnapshot restores cached chats and hydrated threads for i
         'chat-a': {
           activity: [
             {
+              detail: 'Inspecting the failure before I change any files.',
+              id: 'activity-0',
+              kind: 'commentary',
+              status: 'completed',
+              summary: 'Inspecting the failure before I change any files.',
+              title: 'Agent update',
+              turnId: 'turn-1',
+            },
+            {
               detail: 'Command: npm test',
               id: 'activity-1',
               kind: 'command',
@@ -140,5 +149,6 @@ test('sanitizeWorkspaceSnapshot restores cached chats and hydrated threads for i
   ]);
   assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.messages[0]?.content, 'Cached message');
   assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.messages[0]?.turnId, 'turn-1');
-  assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.activity[0]?.id, 'activity-1');
+  assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.activity[0]?.id, 'activity-0');
+  assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.activity[0]?.kind, 'commentary');
 });

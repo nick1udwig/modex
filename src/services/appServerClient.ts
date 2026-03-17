@@ -767,6 +767,11 @@ const isAgentMessageItem = (
   item: RawThreadItem,
 ): item is Extract<RawThreadItem, { type: 'agentMessage' }> => item.type === 'agentMessage' && 'text' in item;
 
+const isCommentaryAgentMessageItem = (
+  item: RawThreadItem,
+): item is Extract<RawThreadItem, { type: 'agentMessage' }> =>
+  isAgentMessageItem(item) && item.phase === 'commentary';
+
 const isVisibleAgentMessageItem = (
   item: RawThreadItem,
 ): item is Extract<RawThreadItem, { type: 'agentMessage' }> =>
@@ -802,6 +807,25 @@ const normalizeActivityStatus = (
 const mapThreadActivity = (thread: RawThread): ActivityEntry[] =>
   thread.turns.flatMap((turn) =>
     turn.items.flatMap<ActivityEntry>((item) => {
+      if (isCommentaryAgentMessageItem(item)) {
+        const detail = item.text.trim();
+        if (!detail) {
+          return [];
+        }
+
+        return [
+          {
+            detail,
+            id: item.id,
+            kind: 'commentary',
+            status: 'completed',
+            summary: compactPreview(detail),
+            title: 'Agent update',
+            turnId: turn.id,
+          } satisfies ActivityEntry,
+        ];
+      }
+
       if (isPlanItem(item)) {
         const detail = item.text.trim();
         if (!detail) {

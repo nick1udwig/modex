@@ -96,6 +96,7 @@ export const ConversationView = ({
   } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [detailsMessageId, setDetailsMessageId] = useState<string | null>(null);
+  const [detailsStackExpanded, setDetailsStackExpanded] = useState(false);
   const [messageMenu, setMessageMenu] = useState<{
     menuLeft: number;
     menuTop: number;
@@ -108,6 +109,7 @@ export const ConversationView = ({
   useEffect(() => {
     setNotice(null);
     setDetailsMessageId(null);
+    setDetailsStackExpanded(false);
     setMessageMenu(null);
     setModelMenuOpen(false);
     setSelectionMessageId(null);
@@ -334,6 +336,8 @@ export const ConversationView = ({
   const selectedMessage =
     spotlightMessageId && chat ? chat.messages.find((message) => message.id === spotlightMessageId) ?? null : null;
   const selectedActivity = selectedMessage && chat ? activityForMessage(chat, selectedMessage.id) : [];
+  const commentaryActivity = [...selectedActivity.filter((entry) => entry.kind === 'commentary')].reverse();
+  const structuredActivity = selectedActivity.filter((entry) => entry.kind !== 'commentary');
 
   return (
     <section className="chat-screen">
@@ -514,6 +518,7 @@ export const ConversationView = ({
               disabled={selectedActivity.length === 0}
               onClick={() => {
                 setDetailsMessageId(selectedMessage.id);
+                setDetailsStackExpanded(false);
                 setMessageMenu(null);
               }}
             >
@@ -529,7 +534,10 @@ export const ConversationView = ({
             className="message-detail-sheet__scrim"
             type="button"
             aria-label="Close agent activity"
-            onClick={() => setDetailsMessageId(null)}
+            onClick={() => {
+              setDetailsMessageId(null);
+              setDetailsStackExpanded(false);
+            }}
           />
 
           <div className="message-detail-sheet__panel">
@@ -538,7 +546,10 @@ export const ConversationView = ({
               <button
                 className="message-detail-sheet__close"
                 type="button"
-                onClick={() => setDetailsMessageId(null)}
+                onClick={() => {
+                  setDetailsMessageId(null);
+                  setDetailsStackExpanded(false);
+                }}
                 aria-label="Close"
               >
                 <Icon name="x" size={16} />
@@ -549,19 +560,75 @@ export const ConversationView = ({
               {selectedActivity.length === 0 ? (
                 <div className="message-sheet__empty">No saved agent activity is available for this reply yet.</div>
               ) : (
-                selectedActivity.map((entry) => (
-                  <article key={entry.id} className="message-sheet__detail-card">
-                    <div className="message-sheet__detail-header">
-                      <span className="message-sheet__detail-title">{entry.title}</span>
-                      <span className={`message-sheet__detail-status message-sheet__detail-status--${entry.status}`}>
-                        {entry.status.replace('-', ' ')}
-                      </span>
+                <>
+                  {commentaryActivity.length > 0 ? (
+                    <div className="message-stack">
+                      <button
+                        className={`message-stack__summary ${detailsStackExpanded ? 'message-stack__summary--expanded' : ''}`}
+                        type="button"
+                        onClick={() => setDetailsStackExpanded((current) => !current)}
+                      >
+                        <div className="message-stack__summary-header">
+                          <span className="message-stack__title">Agent updates</span>
+                          <span className="message-stack__count">
+                            {detailsStackExpanded ? 'Hide updates' : `${commentaryActivity.length} saved`}
+                          </span>
+                        </div>
+                        <div className="message-stack__layers" aria-hidden="true">
+                          <span />
+                          <span />
+                        </div>
+                        <article className="message-sheet__detail-card message-sheet__detail-card--stack">
+                          <div className="message-sheet__detail-header">
+                            <span className="message-sheet__detail-title">{commentaryActivity[0]?.title ?? 'Agent update'}</span>
+                            <span
+                              className={`message-sheet__detail-status message-sheet__detail-status--${
+                                commentaryActivity[0]?.status ?? 'completed'
+                              }`}
+                            >
+                              {(commentaryActivity[0]?.status ?? 'completed').replace('-', ' ')}
+                            </span>
+                          </div>
+                          <div className="message-sheet__detail-kind">intermediate message</div>
+                          <p className="message-sheet__detail-summary">{commentaryActivity[0]?.summary ?? ''}</p>
+                          {commentaryActivity[0]?.detail ? (
+                            <pre className="message-sheet__detail-body">{commentaryActivity[0].detail}</pre>
+                          ) : null}
+                        </article>
+                      </button>
+
+                      {detailsStackExpanded
+                        ? commentaryActivity.slice(1).map((entry) => (
+                            <article key={entry.id} className="message-sheet__detail-card">
+                              <div className="message-sheet__detail-header">
+                                <span className="message-sheet__detail-title">{entry.title}</span>
+                                <span className={`message-sheet__detail-status message-sheet__detail-status--${entry.status}`}>
+                                  {entry.status.replace('-', ' ')}
+                                </span>
+                              </div>
+                              <div className="message-sheet__detail-kind">intermediate message</div>
+                              <p className="message-sheet__detail-summary">{entry.summary}</p>
+                              {entry.detail ? <pre className="message-sheet__detail-body">{entry.detail}</pre> : null}
+                            </article>
+                          ))
+                        : null}
                     </div>
-                    <div className="message-sheet__detail-kind">{entry.kind.replace('-', ' ')}</div>
-                    <p className="message-sheet__detail-summary">{entry.summary}</p>
-                    {entry.detail ? <pre className="message-sheet__detail-body">{entry.detail}</pre> : null}
-                  </article>
-                ))
+                  ) : null}
+
+                  {structuredActivity.map((entry) => (
+                    <article key={entry.id} className="message-sheet__detail-card">
+                      <div className="message-sheet__detail-header">
+                        <span className="message-sheet__detail-title">{entry.title}</span>
+                        <span className={`message-sheet__detail-status message-sheet__detail-status--${entry.status}`}>
+                          {entry.status.replace('-', ' ')}
+                        </span>
+                      </div>
+                      <div className="message-sheet__detail-kind">{entry.kind.replace('-', ' ')}</div>
+                      <p className="message-sheet__detail-summary">{entry.summary}</p>
+                      {entry.detail ? <pre className="message-sheet__detail-body">{entry.detail}</pre> : null}
+                    </article>
+                  ))}
+                </>
               )}
             </div>
           </div>

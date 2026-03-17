@@ -4,7 +4,7 @@ export type JsonRpcId = number | string;
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export type MessageRole = 'system' | 'user' | 'assistant';
-export type ActivityKind = 'command' | 'file-change' | 'plan' | 'reasoning';
+export type ActivityKind = 'command' | 'commentary' | 'file-change' | 'plan' | 'reasoning';
 export type ActivityStatus = 'completed' | 'failed' | 'in-progress';
 
 export interface Message {
