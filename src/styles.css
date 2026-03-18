@@ -1528,10 +1528,22 @@ textarea:disabled {
 }
 
 .settings-sheet__panel--form {
-  padding: 12px 14px calc(16px + env(safe-area-inset-bottom));
-  gap: 14px;
+  padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
   border-radius: 20px 20px 0 0;
   background: #151515;
+}
+
+.settings-sheet__form-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.settings-sheet__panel--create {
+  height: min(680px, calc(100dvh - max(8px, env(safe-area-inset-top))));
 }
 
 .settings-sheet__panel--browse {
@@ -1597,8 +1609,8 @@ textarea:disabled {
 .settings-sheet__sandbox-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px;
+  gap: 8px;
+  padding: 8px;
   border-radius: 16px;
   border: 1px solid var(--border);
   background: #101010;
@@ -1699,16 +1711,28 @@ textarea:disabled {
 }
 
 .settings-sheet__paths-card {
-  flex: 1;
+  flex: 0 0 auto;
   min-width: 0;
-  min-height: 0;
-  padding: 10px;
+  padding: 8px;
   border: 1px solid var(--border);
   border-radius: 16px;
   background: #101010;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
+}
+
+.settings-sheet__paths-body {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  flex: 0 0 auto;
+  min-height: min(184px, 26dvh);
+  max-height: min(280px, 36dvh);
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #151515;
+  overflow: hidden;
 }
 
 .settings-sheet__paths-header {
@@ -1739,13 +1763,21 @@ textarea:disabled {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: 1;
   min-height: 0;
   padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: #151515;
   overflow-y: auto;
+}
+
+.settings-sheet__paths-empty {
+  min-height: 60px;
+  padding: 10px 12px;
+  border: 1px dashed #343434;
+  border-radius: 12px;
+  color: var(--muted);
+  font-family: var(--font-display);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
 }
 
 .settings-sheet__path-row {
@@ -1832,6 +1864,13 @@ textarea:disabled {
   font-size: 12px;
   font-weight: 600;
   text-align: left;
+}
+
+.settings-sheet__browse-action {
+  flex: 0 0 auto;
+  padding: 6px;
+  border-top: 1px solid var(--border);
+  background: #171717;
 }
 
 .settings-sheet__browse-row-icon {

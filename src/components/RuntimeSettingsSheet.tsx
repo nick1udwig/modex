@@ -60,17 +60,18 @@ export const RuntimeSettingsSheet = ({
   const [roots, setRoots] = useState(settings.roots);
   const [view, setView] = useState<'browse' | 'form'>('form');
   const requestSequenceRef = useRef(0);
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (!open) {
-      return;
+    if (open && !wasOpenRef.current) {
+      const seed = seedBrowseState(settings.roots, recentRoots);
+      setAccessMode(settings.accessMode);
+      setBrowse(createBrowseState(seed.anchorPath, seed.selectedPath));
+      setRoots(settings.roots);
+      setView('form');
     }
 
-    const seed = seedBrowseState(settings.roots, recentRoots);
-    setAccessMode(settings.accessMode);
-    setBrowse(createBrowseState(seed.anchorPath, seed.selectedPath));
-    setRoots(settings.roots);
-    setView('form');
+    wasOpenRef.current = open;
   }, [open, recentRoots, settings.accessMode, settings.roots]);
 
   const loadBrowseDirectory = async (path: string, preferredSelection?: string) => {
@@ -313,106 +314,122 @@ export const RuntimeSettingsSheet = ({
           </div>
         </div>
       ) : (
-        <div className="settings-sheet__panel settings-sheet__panel--form" role="dialog" aria-modal="true">
-          <div className="settings-sheet__drag-handle" />
+        <div
+          className={`settings-sheet__panel settings-sheet__panel--form ${
+            mode === 'create' ? 'settings-sheet__panel--create' : ''
+          }`}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="settings-sheet__form-body">
+            <div className="settings-sheet__drag-handle" />
 
-          <div className="settings-sheet__header">
-            <div className="settings-sheet__header-copy">
-              <h2 className="settings-sheet__title">{browseTitle}</h2>
-              <p className="settings-sheet__subtitle">{browseSubtitle}</p>
-            </div>
-
-            <button className="settings-sheet__close" type="button" onClick={onClose} aria-label="Close settings">
-              <Icon name="x" size={16} />
-            </button>
-          </div>
-
-          <div className="settings-sheet__sandbox-card">
-            <div className="settings-sheet__sandbox-row">
-              <div className="settings-sheet__sandbox-copy">
-                <div className="settings-sheet__sandbox-title">Write sandbox</div>
-                <div className="settings-sheet__sandbox-body">
-                  Off keeps Codex read-only. Turn on to allow edits inside selected directories.
-                </div>
+            <div className="settings-sheet__header">
+              <div className="settings-sheet__header-copy">
+                <h2 className="settings-sheet__title">{browseTitle}</h2>
+                <p className="settings-sheet__subtitle">{browseSubtitle}</p>
               </div>
 
-              <button
-                className={`settings-sheet__switch ${accessMode === 'workspace-write' ? 'settings-sheet__switch--on' : ''}`}
-                type="button"
-                onClick={() => setMode(accessMode === 'workspace-write' ? 'read-only' : 'workspace-write')}
-                aria-label="Toggle write sandbox"
-                aria-pressed={accessMode === 'workspace-write'}
-              >
-                <span className="settings-sheet__switch-thumb" />
+              <button className="settings-sheet__close" type="button" onClick={onClose} aria-label="Close settings">
+                <Icon name="x" size={16} />
               </button>
             </div>
 
-            <div className="settings-sheet__mode-bar" role="group" aria-label="Access mode">
-              <button
-                className={`settings-sheet__mode-pill ${accessMode === 'read-only' ? 'settings-sheet__mode-pill--active' : ''}`}
-                type="button"
-                onClick={() => setMode('read-only')}
-              >
-                Read-only
-              </button>
-              <button
-                className={`settings-sheet__mode-pill ${accessMode === 'workspace-write' ? 'settings-sheet__mode-pill--active' : ''}`}
-                type="button"
-                onClick={() => setMode('workspace-write')}
-              >
-                Write access
-              </button>
-            </div>
-          </div>
+            <div className="settings-sheet__sandbox-card">
+              <div className="settings-sheet__sandbox-row">
+                <div className="settings-sheet__sandbox-copy">
+                  <div className="settings-sheet__sandbox-title">Write sandbox</div>
+                  <div className="settings-sheet__sandbox-body">
+                    Off keeps Codex read-only. Turn on to allow edits inside selected directories.
+                  </div>
+                </div>
 
-          <div className="settings-sheet__paths-head">
-            <div className="settings-sheet__paths-title">Allowed directories on remote machine</div>
-            <div className="settings-sheet__paths-copy">
-              Add one or more directories from the remote machine where Codex runs. Codex can only read or write inside
-              this allowed set.
-            </div>
-          </div>
+                <button
+                  className={`settings-sheet__switch ${accessMode === 'workspace-write' ? 'settings-sheet__switch--on' : ''}`}
+                  type="button"
+                  onClick={() => setMode(accessMode === 'workspace-write' ? 'read-only' : 'workspace-write')}
+                  aria-label="Toggle write sandbox"
+                  aria-pressed={accessMode === 'workspace-write'}
+                >
+                  <span className="settings-sheet__switch-thumb" />
+                </button>
+              </div>
 
-          <div className="settings-sheet__paths-card">
-            <div className="settings-sheet__paths-header">
-              <span className="settings-sheet__paths-section-title">Allowed remote directories</span>
-              <span className="settings-sheet__count-pill">{selectedRoots.length} selected</span>
+              <div className="settings-sheet__mode-bar" role="group" aria-label="Access mode">
+                <button
+                  className={`settings-sheet__mode-pill ${accessMode === 'read-only' ? 'settings-sheet__mode-pill--active' : ''}`}
+                  type="button"
+                  onClick={() => setMode('read-only')}
+                >
+                  Read-only
+                </button>
+                <button
+                  className={`settings-sheet__mode-pill ${accessMode === 'workspace-write' ? 'settings-sheet__mode-pill--active' : ''}`}
+                  type="button"
+                  onClick={() => setMode('workspace-write')}
+                >
+                  Write access
+                </button>
+              </div>
             </div>
 
-            <div className="settings-sheet__paths-helper">
-              These are normal file paths on the remote machine running Codex, not paths on this mobile device.
+            <div className="settings-sheet__paths-head">
+              <div className="settings-sheet__paths-title">Allowed directories on remote machine</div>
+              <div className="settings-sheet__paths-copy">
+                Add one or more directories from the remote machine where Codex runs. Codex can only read or write inside
+                this allowed set.
+              </div>
             </div>
 
-            <div className="settings-sheet__paths-list" aria-label="Selected remote directories">
-              {selectedRoots.map((root, index) => (
-                <div key={root} className="settings-sheet__path-row">
-                  <button className="settings-sheet__path-card" type="button" onClick={() => moveRootToFront(root)}>
-                    <span className="settings-sheet__path-icon">
-                      <Icon name={index === 0 ? 'folder-open' : 'folder'} size={16} />
+            <div className="settings-sheet__paths-card">
+              <div className="settings-sheet__paths-header">
+                <span className="settings-sheet__paths-section-title">Allowed remote directories</span>
+                <span className="settings-sheet__count-pill">{selectedRoots.length} selected</span>
+              </div>
+
+              <div className="settings-sheet__paths-helper">
+                These are normal file paths on the remote machine running Codex, not paths on this mobile device.
+              </div>
+
+              <div className="settings-sheet__paths-body">
+                <div className="settings-sheet__paths-list" aria-label="Selected remote directories">
+                  {selectedRoots.length === 0 ? (
+                    <div className="settings-sheet__paths-empty">No directories selected yet.</div>
+                  ) : null}
+
+                  {selectedRoots.map((root, index) => (
+                    <div key={root} className="settings-sheet__path-row">
+                      <button className="settings-sheet__path-card" type="button" onClick={() => moveRootToFront(root)}>
+                        <span className="settings-sheet__path-icon">
+                          <Icon name={index === 0 ? 'folder-open' : 'folder'} size={16} />
+                        </span>
+                        <span className="settings-sheet__path-copy">
+                          <span className="settings-sheet__path-label">{rootSummaryLabel(index)}</span>
+                          <span className="settings-sheet__path-value">{root}</span>
+                        </span>
+                      </button>
+
+                      <button
+                        className="settings-sheet__path-remove"
+                        type="button"
+                        onClick={() => removeRoot(root)}
+                        aria-label={`Remove ${root}`}
+                      >
+                        <Icon name="x" size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="settings-sheet__browse-action">
+                  <button className="settings-sheet__browse-row" type="button" onClick={openBrowsePane}>
+                    <span className="settings-sheet__browse-row-icon">
+                      <Icon name="plus" size={16} />
                     </span>
-                    <span className="settings-sheet__path-copy">
-                      <span className="settings-sheet__path-label">{rootSummaryLabel(index)}</span>
-                      <span className="settings-sheet__path-value">{root}</span>
-                    </span>
-                  </button>
-
-                  <button
-                    className="settings-sheet__path-remove"
-                    type="button"
-                    onClick={() => removeRoot(root)}
-                    aria-label={`Remove ${root}`}
-                  >
-                    <Icon name="x" size={14} />
+                    <span>Browse remote machine directories</span>
                   </button>
                 </div>
-              ))}
-
-              <button className="settings-sheet__browse-row" type="button" onClick={openBrowsePane}>
-                <span className="settings-sheet__browse-row-icon">
-                  <Icon name="plus" size={16} />
-                </span>
-                <span>Browse remote machine directories</span>
-              </button>
+              </div>
             </div>
           </div>
 
