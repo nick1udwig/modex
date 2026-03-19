@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
+import { renderMessageMarkdown } from '../app/messageMarkdown';
 import type { ActivityEntry, ChatThread, ModelOption, ReasoningEffort } from '../app/types';
-import { HighlightedText } from './HighlightedText';
 import { Icon } from './Icon';
 
 interface ConversationViewProps {
@@ -92,7 +92,7 @@ export const ConversationView = ({
   selectedReasoningEffort,
 }: ConversationViewProps) => {
   const bottomRef = useRef<HTMLDivElement | null>(null);
-  const messageBodyNodesRef = useRef<Record<string, HTMLParagraphElement | null>>({});
+  const messageBodyNodesRef = useRef<Record<string, HTMLDivElement | null>>({});
   const messageNodesRef = useRef<Record<string, HTMLDivElement | null>>({});
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
@@ -583,19 +583,20 @@ export const ConversationView = ({
                 }}
                 aria-label={`${messageLabel(message.role)} message`}
               >
-                <p
+                <div
                   ref={(node) => {
                     messageBodyNodesRef.current[message.id] = node;
                   }}
-                  className={`message-card__body ${selectionMessageId === message.id ? 'message-card__body--selectable' : ''}`}
+                  className={`message-card__body message-markdown ${
+                    selectionMessageId === message.id ? 'message-card__body--selectable' : ''
+                  }`}
                 >
-                  <HighlightedText
-                    activeHitId={activeSearchHitId}
-                    hitIdPrefix={`search-hit-${message.id}`}
-                    query={searchQuery}
-                    text={message.content}
-                  />
-                </p>
+                  {renderMessageMarkdown(message.content, {
+                    activeHitId: activeSearchHitId,
+                    hitIdPrefix: `search-hit-${message.id}`,
+                    query: searchQuery,
+                  })}
+                </div>
                 {isLastAssistant ? <span className="message-card__meta">{formatMeta(chat.updatedAt)}</span> : null}
               </div>
             </div>

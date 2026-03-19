@@ -424,7 +424,6 @@ textarea:disabled {
   margin: 0;
   font-size: 13px;
   line-height: 1.35;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: none;
   -webkit-user-select: none;
@@ -453,6 +452,105 @@ textarea:disabled {
 
 .message-card--system {
   color: var(--muted-strong);
+}
+
+.message-markdown > :first-child {
+  margin-top: 0;
+}
+
+.message-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.message-markdown__paragraph,
+.message-markdown__heading,
+.message-markdown__quote,
+.message-markdown__list,
+.message-markdown__code-block {
+  margin: 10px 0 0;
+}
+
+.message-markdown__paragraph {
+  white-space: pre-wrap;
+}
+
+.message-markdown__heading {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.message-markdown__heading--1,
+.message-markdown__heading--2 {
+  font-size: 15px;
+}
+
+.message-markdown__heading--3,
+.message-markdown__heading--4,
+.message-markdown__heading--5,
+.message-markdown__heading--6 {
+  font-size: 14px;
+}
+
+.message-markdown__list {
+  padding-left: 18px;
+}
+
+.message-markdown__list-item + .message-markdown__list-item {
+  margin-top: 4px;
+}
+
+.message-markdown__quote {
+  margin-left: 0;
+  padding-left: 10px;
+  border-left: 2px solid rgba(255, 132, 0, 0.38);
+  color: var(--muted-strong);
+}
+
+.message-markdown__code,
+.message-markdown__code-block {
+  font-family: var(--font-mono);
+}
+
+.message-markdown__code {
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.95em;
+}
+
+.message-markdown__code-block {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.24);
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.message-markdown__code-block-inner {
+  display: block;
+}
+
+.message-markdown__link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 132, 0, 0.55);
+  text-underline-offset: 0.18em;
+}
+
+.message-markdown__rule {
+  height: 1px;
+  margin: 10px 0 0;
+  border: 0;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.message-card--user .message-markdown__code {
+  background: rgba(17, 17, 17, 0.12);
+}
+
+.message-card--user .message-markdown__code-block {
+  background: rgba(17, 17, 17, 0.14);
 }
 
 .message-sheet__details {
