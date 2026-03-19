@@ -144,18 +144,18 @@ type RawThreadItem =
   | {
       id: string;
       phase?: string | null;
-      text: string;
+      text: unknown;
       type: 'agentMessage';
     }
   | {
       id: string;
-      text: string;
+      text: unknown;
       type: 'plan';
     }
   | {
-      content?: string[] | null;
+      content?: unknown[] | null;
       id: string;
-      summary?: string[] | null;
+      summary?: unknown[] | null;
       type: 'reasoning';
     }
   | {
@@ -184,25 +184,25 @@ type RawThreadItem =
 
 type RawUserInput =
   | {
-      text: string;
+      text: unknown;
       type: 'text';
     }
   | {
       type: 'image';
-      url: string;
+      url: unknown;
     }
   | {
-      path: string;
+      path: unknown;
       type: 'localImage';
     }
   | {
-      name: string;
-      path: string;
+      name: unknown;
+      path: unknown;
       type: 'skill';
     }
   | {
-      name: string;
-      path: string;
+      name: unknown;
+      path: unknown;
       type: 'mention';
     };
 
@@ -411,7 +411,48 @@ const omitUndefined = <T extends Record<string, unknown>>(value: T) =>
   Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 
 const isoFromSeconds = (seconds: number) => new Date(seconds * 1000).toISOString();
-const compactSummaryText = (text: string) => text.replace(/\s+/g, ' ').trim();
+const textFragmentFromUnknown = (value: unknown): string => {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => textFragmentFromUnknown(entry)).join('');
+  }
+
+  if (!value || typeof value !== 'object') {
+    return '';
+  }
+
+  const record = value as Record<string, unknown>;
+
+  if ('text' in record) {
+    return textFragmentFromUnknown(record.text);
+  }
+
+  if ('content' in record) {
+    return textFragmentFromUnknown(record.content);
+  }
+
+  return '';
+};
+
+const textSectionFromUnknown = (value: unknown) => textFragmentFromUnknown(value).trim();
+
+const textSectionsFromUnknown = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => textSectionFromUnknown(entry)).filter((entry) => entry.length > 0);
+  }
+
+  const section = textSectionFromUnknown(value);
+  return section.length > 0 ? [section] : [];
+};
+
+const compactSummaryText = (text: unknown) => textSectionFromUnknown(text).replace(/\s+/g, ' ').trim();
 
 const normalizeRoots = (roots: string[]) => {
   const seen = new Set<string>();
@@ -880,7 +921,7 @@ const activityEntryFromItem = (
   },
 ): ActivityEntry | null => {
   if (isCommentaryAgentMessageItem(item)) {
-    const detail = item.text.trim();
+    const detail = textSectionFromUnknown(item.text);
     if (!detail) {
       return null;
     }
@@ -897,7 +938,7 @@ const activityEntryFromItem = (
   }
 
   if (isPlanItem(item)) {
-    const detail = item.text.trim();
+    const detail = textSectionFromUnknown(item.text);
     if (!detail) {
       return null;
     }
@@ -914,9 +955,7 @@ const activityEntryFromItem = (
   }
 
   if (isReasoningItem(item)) {
-    const sections = [...(item.summary ?? []), ...(item.content ?? [])]
-      .map((section) => section.trim())
-      .filter((section) => section.length > 0);
+    const sections = [...textSectionsFromUnknown(item.summary ?? []), ...textSectionsFromUnknown(item.content ?? [])];
 
     if (sections.length === 0) {
       return null;
@@ -1133,15 +1172,23 @@ export const flattenUserInputs = (inputs: RawUserInput[]) =>
     .map((input) => {
       switch (input.type) {
         case 'text':
-          return input.text.trim();
-        case 'image':
-          return `[Image] ${input.url}`;
-        case 'localImage':
-          return `[Local image] ${input.path}`;
-        case 'skill':
-          return `$${input.name}`;
-        case 'mention':
-          return `@${input.name}`;
+          return textSectionFromUnknown(input.text);
+        case 'image': {
+          const url = textSectionFromUnknown(input.url);
+          return url ? `[Image] ${url}` : '[Image]';
+        }
+        case 'localImage': {
+          const path = textSectionFromUnknown(input.path);
+          return path ? `[Local image] ${path}` : '[Local image]';
+        }
+        case 'skill': {
+          const name = textSectionFromUnknown(input.name);
+          return name ? `$${name}` : '';
+        }
+        case 'mention': {
+          const name = textSectionFromUnknown(input.name);
+          return name ? `@${name}` : '';
+        }
         default:
           return '';
       }
@@ -1182,7 +1229,7 @@ export const mapThreadMessages = (thread: RawThread): Message[] => {
       }
 
       if (isVisibleAgentMessageItem(item)) {
-        const content = item.text.trim();
+        const content = textSectionFromUnknown(item.text);
         if (content.length === 0) {
           continue;
         }
@@ -2363,8 +2410,13 @@ export class AppServerClient implements RemoteAppClient {
       return null;
     }
 
+    const content = textSectionFromUnknown(item.text);
+    if (content.length === 0) {
+      return null;
+    }
+
     return {
-      content: item.text,
+      content,
       createdAt: new Date().toISOString(),
       id: item.id,
       role: 'assistant',

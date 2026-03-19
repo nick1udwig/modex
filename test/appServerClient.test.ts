@@ -496,6 +496,61 @@ test('mapThread preserves non-message activity for later inspection', () => {
   );
 });
 
+test('mapThread normalizes structured text payloads from app-server items', () => {
+  const thread = mapThread({
+    createdAt: 1_710_000_000,
+    cwd: '/workspace/project',
+    id: 'thr_structured_text',
+    modelProvider: 'openai',
+    name: null,
+    preview: '',
+    status: { type: 'idle' },
+    turns: [
+      {
+        id: 'turn-structured',
+        items: [
+          {
+            content: [{ type: 'text', text: { text: 'Explain the `deploy` failure' } }],
+            id: 'item-user',
+            type: 'userMessage',
+          },
+          {
+            content: [{ text: 'Found the missing env var.' }],
+            id: 'reasoning-1',
+            summary: [{ type: 'summary_text', text: '**Checking logs**' }],
+            type: 'reasoning',
+          },
+          {
+            id: 'item-assistant',
+            phase: 'final_answer',
+            text: { type: 'output_text', text: 'The `API_KEY` env var is missing.' },
+            type: 'agentMessage',
+          },
+        ],
+        status: 'completed',
+      },
+    ],
+    updatedAt: 1_710_000_120,
+  });
+
+  assert.deepEqual(
+    thread.messages.map((message) => message.content),
+    ['Explain the `deploy` failure', 'The `API_KEY` env var is missing.'],
+  );
+  assert.deepEqual(
+    thread.activity.map((entry) => ({
+      detail: entry.detail,
+      summary: entry.summary,
+    })),
+    [
+      {
+        detail: '**Checking logs**\n\nFound the missing env var.',
+        summary: '**Checking logs**',
+      },
+    ],
+  );
+});
+
 test('shouldResumeAfterTurnStartError only retries unloaded threads', () => {
   assert.equal(shouldResumeAfterTurnStartError(new Error('thread not found: thr_123')), true);
   assert.equal(shouldResumeAfterTurnStartError(new Error('no rollout found for thread id thr_123')), false);
