@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
 import { renderMessageMarkdown } from '../app/messageMarkdown';
+import { positionMessageMenu } from '../app/messageMenuPosition';
 import type { ActivityEntry, ChatThread, ModelOption, ReasoningEffort } from '../app/types';
 import { Icon } from './Icon';
 
@@ -37,6 +38,22 @@ const messageLabel = (role: ChatThread['messages'][number]['role']) => {
 
 const LONG_PRESS_MS = 380;
 const LONG_PRESS_MOVE_THRESHOLD = 12;
+const MESSAGE_MENU_ESTIMATE = {
+  height: 112,
+  width: 180,
+};
+
+interface MessageMenuState {
+  anchorRect: {
+    bottom: number;
+    left: number;
+    right: number;
+    top: number;
+  };
+  menuLeft: number;
+  menuTop: number;
+  messageId: string;
+}
 
 const formatReasoningEffort = (effort: ReasoningEffort | null) => (effort ? effort.replace(/^./, (letter) => letter.toUpperCase()) : 'Default');
 
@@ -93,6 +110,7 @@ export const ConversationView = ({
 }: ConversationViewProps) => {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const messageBodyNodesRef = useRef<Record<string, HTMLDivElement | null>>({});
+  const messageMenuRef = useRef<HTMLDivElement | null>(null);
   const messageNodesRef = useRef<Record<string, HTMLDivElement | null>>({});
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
@@ -113,11 +131,7 @@ export const ConversationView = ({
   const [detailsMessageId, setDetailsMessageId] = useState<string | null>(null);
   const [detailsStackExpanded, setDetailsStackExpanded] = useState(false);
   const [expandedStackMessageId, setExpandedStackMessageId] = useState<string | null>(null);
-  const [messageMenu, setMessageMenu] = useState<{
-    menuLeft: number;
-    menuTop: number;
-    messageId: string;
-  } | null>(null);
+  const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [selectionMessageId, setSelectionMessageId] = useState<string | null>(null);
   const selectedModel = modelOptions.find((model) => model.id === selectedModelId) ?? modelOptions[0] ?? null;
@@ -277,6 +291,38 @@ export const ConversationView = ({
     };
   }, [messageMenu]);
 
+  useEffect(() => {
+    if (!messageMenu || !messageMenuRef.current) {
+      return;
+    }
+
+    const nextPosition = positionMessageMenu(
+      messageMenu.anchorRect,
+      {
+        height: messageMenuRef.current.offsetHeight,
+        width: messageMenuRef.current.offsetWidth,
+      },
+      {
+        height: window.innerHeight,
+        width: window.innerWidth,
+      },
+    );
+
+    if (nextPosition.left === messageMenu.menuLeft && nextPosition.top === messageMenu.menuTop) {
+      return;
+    }
+
+    setMessageMenu((current) =>
+      current && current.messageId === messageMenu.messageId
+        ? {
+            ...current,
+            menuLeft: nextPosition.left,
+            menuTop: nextPosition.top,
+          }
+        : current,
+    );
+  }, [messageMenu]);
+
   const cancelLongPress = () => {
     if (!longPressRef.current) {
       return;
@@ -296,9 +342,24 @@ export const ConversationView = ({
       return;
     }
 
+    const anchorRect = {
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+    };
+    const position = positionMessageMenu(
+      anchorRect,
+      MESSAGE_MENU_ESTIMATE,
+      {
+        height: window.innerHeight,
+        width: window.innerWidth,
+      },
+    );
     setMessageMenu({
-      menuLeft: Math.min(window.innerWidth - 188, Math.max(16, rect.left)),
-      menuTop: rect.bottom + 10 > window.innerHeight - 220 ? Math.max(16, rect.top - 164) : rect.bottom + 10,
+      anchorRect,
+      menuLeft: position.left,
+      menuTop: position.top,
       messageId,
     });
   };
@@ -618,6 +679,7 @@ export const ConversationView = ({
           />
 
           <div
+            ref={messageMenuRef}
             className="message-overlay__menu"
             style={{
               left: `${messageMenu.menuLeft}px`,
