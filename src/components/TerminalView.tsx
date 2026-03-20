@@ -112,10 +112,12 @@ export const TerminalView = ({ onSessionUpdate, session }: TerminalViewProps) =>
     terminal.focus();
     terminalRef.current = terminal;
 
-    const socket = new WebSocket(buildTerminalAttachUrl(session.idHash, terminal.rows, terminal.cols));
-    socket.binaryType = 'arraybuffer';
-    socketRef.current = socket;
     setConnectionLabel(isTerminalSessionLive(session.status) ? 'Connecting…' : terminalStatusLabel(session.status));
+
+    let connectTimeoutId: number | null = null;
+    let disposed = false;
+    let socket: WebSocket | null = null;
+    let socketOpened = false;
 
     const sendResize = () => {
       if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
@@ -149,50 +151,70 @@ export const TerminalView = ({ onSessionUpdate, session }: TerminalViewProps) =>
     resizeObserver.observe(container);
 
     const removeInputListener = terminal.onData((data) => {
-      if (!isTerminalSessionLive(sessionRef.current?.status ?? session.status) || socket.readyState !== WebSocket.OPEN) {
+      if (!isTerminalSessionLive(sessionRef.current?.status ?? session.status) || socket?.readyState !== WebSocket.OPEN) {
         return;
       }
 
       socket.send(encoder.encode(data));
     });
 
-    socket.addEventListener('open', () => {
-      setConnectionLabel(isTerminalSessionLive(session.status) ? 'Live session' : terminalStatusLabel(session.status));
-      sendResize();
-    });
-
-    socket.addEventListener('message', (event) => {
-      if (typeof event.data === 'string') {
-        try {
-          const payload = JSON.parse(event.data) as TerminalEvent;
-          if (payload.type === 'terminal.session' && payload.session) {
-            sessionRef.current = payload.session;
-            onSessionUpdateRef.current(payload.session);
-            setConnectionLabel(terminalStatusLabel(payload.session.status));
-            terminal.options.disableStdin = !isTerminalSessionLive(payload.session.status);
-            terminal.options.cursorBlink = isTerminalSessionLive(payload.session.status);
-          } else if (payload.type === 'terminal.error' && payload.message) {
-            terminal.writeln(`\r\n[modex] ${payload.message}`);
-            setConnectionLabel('Connection error');
-          }
-        } catch {
-          // Ignore malformed control frames.
-        }
+    const connectSocket = () => {
+      if (disposed) {
         return;
       }
 
-      void toUint8Array(event.data as Blob | ArrayBuffer).then((bytes) => {
-        terminal.write(bytes);
+      socket = new WebSocket(buildTerminalAttachUrl(session.idHash, terminal.rows, terminal.cols));
+      socket.binaryType = 'arraybuffer';
+      socketRef.current = socket;
+
+      socket.addEventListener('open', () => {
+        if (disposed) {
+          socket?.close();
+          return;
+        }
+
+        socketOpened = true;
+        setConnectionLabel(isTerminalSessionLive(session.status) ? 'Live session' : terminalStatusLabel(session.status));
+        sendResize();
       });
-    });
 
-    socket.addEventListener('close', () => {
-      setConnectionLabel(terminalStatusLabel(sessionRef.current?.status ?? session.status));
-    });
+      socket.addEventListener('message', (event) => {
+        if (typeof event.data === 'string') {
+          try {
+            const payload = JSON.parse(event.data) as TerminalEvent;
+            if (payload.type === 'terminal.session' && payload.session) {
+              sessionRef.current = payload.session;
+              onSessionUpdateRef.current(payload.session);
+              setConnectionLabel(terminalStatusLabel(payload.session.status));
+              terminal.options.disableStdin = !isTerminalSessionLive(payload.session.status);
+              terminal.options.cursorBlink = isTerminalSessionLive(payload.session.status);
+            } else if (payload.type === 'terminal.error' && payload.message) {
+              terminal.writeln(`\r\n[modex] ${payload.message}`);
+              setConnectionLabel('Connection error');
+            }
+          } catch {
+            // Ignore malformed control frames.
+          }
+          return;
+        }
 
-    socket.addEventListener('error', () => {
-      setConnectionLabel('Connection error');
-    });
+        void toUint8Array(event.data as Blob | ArrayBuffer).then((bytes) => {
+          terminal.write(bytes);
+        });
+      });
+
+      socket.addEventListener('close', () => {
+        setConnectionLabel(terminalStatusLabel(sessionRef.current?.status ?? session.status));
+      });
+
+      socket.addEventListener('error', () => {
+        setConnectionLabel('Connection error');
+      });
+    };
+
+    // Delay the attach just one tick so React StrictMode's mount/unmount probe
+    // can cancel the first pass before the browser logs a spurious websocket failure.
+    connectTimeoutId = window.setTimeout(connectSocket, 0);
 
     const handlePointerDown = () => {
       terminal.focus();
@@ -200,6 +222,7 @@ export const TerminalView = ({ onSessionUpdate, session }: TerminalViewProps) =>
     container.addEventListener('pointerdown', handlePointerDown);
 
     return () => {
+      disposed = true;
       container.removeEventListener('pointerdown', handlePointerDown);
       resizeObserver.disconnect();
       removeInputListener.dispose();
@@ -207,7 +230,13 @@ export const TerminalView = ({ onSessionUpdate, session }: TerminalViewProps) =>
         window.cancelAnimationFrame(resizeFrameRef.current);
         resizeFrameRef.current = null;
       }
-      socket.close();
+      if (connectTimeoutId !== null) {
+        window.clearTimeout(connectTimeoutId);
+        connectTimeoutId = null;
+      }
+      if (socketOpened && socket) {
+        socket.close();
+      }
       if (socketRef.current === socket) {
         socketRef.current = null;
       }

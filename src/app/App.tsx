@@ -6,6 +6,7 @@ import { chatTabId, isChatTab, isTerminalTab, terminalSessionPreview, terminalSt
 import { isChatActiveStatus } from './chatStatus';
 import type { ApprovalPolicy, ChatRuntimeSettings, ChatStatus, ModelOption, PendingAttachment, ReasoningEffort } from './types';
 import { useRealtimeTranscription } from './useRealtimeTranscription';
+import { readViewportSize, shouldUseWideShell } from './layout';
 import { Composer } from '../components/Composer';
 import { ConversationView } from '../components/ConversationView';
 import { Icon } from '../components/Icon';
@@ -194,6 +195,7 @@ export const App = () => {
   const [settingsSheet, setSettingsSheet] = useState<SettingsSheetState>(CLOSED_SETTINGS_SHEET);
   const [terminalCreateSheetOpen, setTerminalCreateSheetOpen] = useState(false);
   const [terminalSessionPickerOpen, setTerminalSessionPickerOpen] = useState(false);
+  const [wideShell, setWideShell] = useState(() => shouldUseWideShell(readViewportSize()));
   const stageRef = useRef<HTMLDivElement | null>(null);
   const footerActionNodeRef = useRef<HTMLButtonElement | null>(null);
   const drawerPanelRef = useRef<HTMLElement | null>(null);
@@ -256,6 +258,18 @@ export const App = () => {
   useEffect(() => {
     setAttachmentError(null);
   }, [modex.activeChatId]);
+
+  useEffect(() => {
+    const syncWideShell = () => {
+      setWideShell(shouldUseWideShell(readViewportSize()));
+    };
+
+    syncWideShell();
+    window.addEventListener('resize', syncWideShell);
+    return () => {
+      window.removeEventListener('resize', syncWideShell);
+    };
+  }, []);
 
   useEffect(() => {
     const previousSnapshot = previousTabSnapshotRef.current;
@@ -1210,7 +1224,7 @@ export const App = () => {
 
   return (
     <div className="app-shell">
-      <div className="mobile-shell">
+      <div className={`mobile-shell ${wideShell ? 'mobile-shell--wide' : ''}`}>
         <div className="workspace-shell">
           <main className="workspace-main">
             <div className="workspace-stage" ref={stageRef}>

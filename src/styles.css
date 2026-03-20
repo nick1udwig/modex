@@ -86,6 +86,10 @@ textarea:disabled {
   overflow: hidden;
 }
 
+.mobile-shell--wide {
+  max-width: 1040px;
+}
+
 .workspace-shell {
   flex: 1;
   min-height: 0;
@@ -1070,6 +1074,10 @@ textarea:disabled {
   gap: 10px;
   align-content: start;
   overscroll-behavior: contain;
+}
+
+.mobile-shell--wide .tabs-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .tab-card {
