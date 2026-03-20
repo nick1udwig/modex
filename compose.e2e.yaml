@@ -10,6 +10,7 @@ services:
       MODEX_FS_ROOTS: ${MODEX_FS_ROOTS:-/workspace/modex}
       MODEX_PUBLIC_ORIGIN: ${MODEX_PUBLIC_ORIGIN:-http://localhost:8080}
       MODEX_SIDECAR_ALLOWED_ORIGINS: ${MODEX_SIDECAR_ALLOWED_ORIGINS:-}
+      MODEX_WORKSPACE: /workspace/modex
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     healthcheck:
       test:
@@ -20,9 +21,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
-      start_period: 20s
+      start_period: 60s
     ports:
       - "${MODEX_E2E_PORT:-8080}:8080"
     restart: unless-stopped
     volumes:
+      - .:/workspace/modex
       - ${HOME}/.codex:/host-codex:ro

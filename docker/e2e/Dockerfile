@@ -22,6 +22,8 @@ RUN CGO_ENABLED=0 go build -o /out/modex-sidecar ./cmd/modex-sidecar
 
 FROM node:22-bookworm-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
+ENV GOPATH=/go
+ENV PATH=/usr/local/go/bin:${PATH}
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates caddy curl git openssh-client ripgrep \
@@ -32,7 +34,9 @@ RUN npm install -g @openai/codex@0.115.0
 WORKDIR /workspace/modex
 
 COPY . /workspace/modex
-COPY --from=frontend-build /src/modex/dist /srv/modex
+COPY --from=frontend-build /src/modex/node_modules /opt/modex-node_modules
+COPY --from=sidecar-build /usr/local/go /usr/local/go
+COPY --from=sidecar-build /go/pkg /go/pkg
 COPY --from=sidecar-build /out/modex-sidecar /usr/local/bin/modex-sidecar
 COPY docker/e2e/Caddyfile /etc/caddy/Caddyfile
 COPY docker/e2e/entrypoint.sh /usr/local/bin/modex-e2e-entrypoint

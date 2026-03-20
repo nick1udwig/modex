@@ -58,6 +58,7 @@ Work style: telegraph; noun-phrases ok; drop grammar; min tokens.
 - Keep it observable (logs, panes, tails, MCP/browser tools).
 - Release: read `docs/RELEASING.md` (or find best checklist if missing).
 - Reminder: check `~/.profile` for missing env keys.
+- For Modex E2E debug of agent-made changes, prefer `docker compose -f compose.e2e.yaml up --build`; it bind-mounts the live repo, rebuilds frontend + sidecar on startup, and uses host `~/.codex`.
 
 ## Git
 - Safe by default: `git status/diff/log`. Push only when user asks.

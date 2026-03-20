@@ -2,6 +2,7 @@
 set -euo pipefail
 
 declare -a PIDS=()
+WORKSPACE=${MODEX_WORKSPACE:-/workspace/modex}
 
 log() {
   printf '[modex-e2e] %s\n' "$*"
@@ -26,6 +27,35 @@ prepare_codex_home() {
     log "Syncing host Codex home into the container"
     sync_tree /host-codex /root/.codex
   fi
+}
+
+seed_node_modules() {
+  if [ -d node_modules ]; then
+    return
+  fi
+
+  if [ -d /opt/modex-node_modules ]; then
+    log "Seeding node_modules from the image cache"
+    cp -a /opt/modex-node_modules ./node_modules
+    return
+  fi
+
+  log "Installing frontend dependencies"
+  npm ci
+}
+
+build_frontend() {
+  seed_node_modules
+  log "Building frontend from ${WORKSPACE}"
+  npm run build
+}
+
+build_sidecar() {
+  log "Building sidecar from ${WORKSPACE}"
+  (
+    cd "${WORKSPACE}/backend/sidecar"
+    GOCACHE=/tmp/modex-go-build go build -o /usr/local/bin/modex-sidecar-live ./cmd/modex-sidecar
+  )
 }
 
 derive_sidecar_origins() {
@@ -67,7 +97,12 @@ main() {
 
   prepare_codex_home
 
-  export MODEX_FS_ROOTS=${MODEX_FS_ROOTS:-/workspace/modex}
+  if [ ! -f "${WORKSPACE}/package.json" ]; then
+    log "Workspace missing package.json at ${WORKSPACE}"
+    exit 1
+  fi
+
+  export MODEX_FS_ROOTS=${MODEX_FS_ROOTS:-$WORKSPACE}
   export MODEX_SIDECAR_ADDR=${MODEX_SIDECAR_ADDR:-:4230}
   export MODEX_SIDECAR_ALLOWED_ORIGINS
   MODEX_SIDECAR_ALLOWED_ORIGINS=$(derive_sidecar_origins)
@@ -83,10 +118,13 @@ main() {
     app_server_args=(${MODEX_APP_SERVER_EXTRA_ARGS})
   fi
 
-  cd /workspace/modex
+  cd "$WORKSPACE"
+
+  build_frontend
+  build_sidecar
 
   start_service "codex app-server" codex app-server --listen "$listen_url" "${app_server_args[@]}"
-  start_service "modex-sidecar" modex-sidecar
+  start_service "modex-sidecar" /usr/local/bin/modex-sidecar-live
   start_service "caddy" caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 
   wait -n "${PIDS[@]}"
