@@ -7,6 +7,7 @@ import {
   collectThreadIdsToRefresh,
   findActiveTurnId,
   flattenUserInputs,
+  isAppServerThreadNotFoundError,
   isAppServerConnectionClosedError,
   isAppServerTurnWaitTimeoutError,
   latestTurnFailure,
@@ -243,10 +244,11 @@ test('flattenUserInputs preserves text and labels non-text inputs', () => {
   assert.equal(
     flattenUserInputs([
       { type: 'text', text: 'Inspect the repository' },
+      { type: 'image', url: 'data:image/jpeg;base64,AAAA' },
       { type: 'mention', name: 'filesystem', path: 'app://fs' },
       { type: 'localImage', path: '/tmp/screenshot.png' },
     ]),
-    ['Inspect the repository', '@filesystem', '[Local image] /tmp/screenshot.png'].join('\n'),
+    ['Inspect the repository', '[Image] Uploaded photo', '@filesystem', '[Local image] /tmp/screenshot.png'].join('\n'),
   );
 });
 
@@ -368,7 +370,7 @@ test('mapThread flattens turn history into chat messages', () => {
   );
 });
 
-test('mapThread exposes in-progress activity items as transient assistant updates', () => {
+test('mapThread keeps in-progress activity in the activity stack instead of the message history', () => {
   const thread = mapThread({
     createdAt: 1_710_000_000,
     cwd: '/workspace/project',
@@ -408,15 +410,66 @@ test('mapThread exposes in-progress activity items as transient assistant update
 
   assert.deepEqual(
     thread.messages.map((message) => message.content),
-    [
-      'Check the follow-up behavior',
-      'Reading the live thread data now.',
-      'Running command: npm test\nCommand: npm test\nDirectory: /workspace/project',
-    ],
+    ['Check the follow-up behavior'],
   );
   assert.deepEqual(
-    thread.activity.map((entry) => entry.status),
-    ['in-progress', 'in-progress'],
+    thread.activity.map((entry) => ({
+      status: entry.status,
+      summary: entry.summary,
+      title: entry.title,
+    })),
+    [
+      { status: 'in-progress', summary: 'Reading the live thread data now.', title: 'Agent update' },
+      { status: 'in-progress', summary: 'npm test', title: 'npm test' },
+    ],
+  );
+});
+
+test('mapThread exposes in-progress assistant replies in activity so the live stack can render them', () => {
+  const thread = mapThread({
+    createdAt: 1_710_000_000,
+    cwd: '/workspace/project',
+    id: 'thr_live_reply',
+    modelProvider: 'openai',
+    name: null,
+    preview: '',
+    status: { type: 'active', activeFlags: [] },
+    turns: [
+      {
+        id: 'turn-progress',
+        items: [
+          {
+            content: [{ type: 'text', text: 'Summarize the repo' }],
+            id: 'item-user',
+            type: 'userMessage',
+          },
+          {
+            id: 'reply-1',
+            phase: 'final_answer',
+            text: 'I am reading the repository structure now.',
+            type: 'agentMessage',
+          },
+        ],
+        status: 'inProgress',
+      },
+    ],
+    updatedAt: 1_710_000_120,
+  });
+
+  assert.deepEqual(thread.messages.map((message) => message.content), ['Summarize the repo']);
+  assert.deepEqual(
+    thread.activity.map((entry) => ({
+      detail: entry.detail,
+      status: entry.status,
+      title: entry.title,
+    })),
+    [
+      {
+        detail: 'I am reading the repository structure now.',
+        status: 'in-progress',
+        title: 'Draft reply',
+      },
+    ],
   );
 });
 
@@ -496,6 +549,115 @@ test('mapThread preserves non-message activity for later inspection', () => {
   );
 });
 
+test('mapThread normalizes structured file-change payloads from app-server', () => {
+  const thread = mapThread({
+    createdAt: 1_710_000_000,
+    cwd: '/workspace/project',
+    id: 'thr_file_change_structured',
+    modelProvider: 'openai',
+    name: null,
+    preview: '',
+    status: { type: 'idle' },
+    turns: [
+      {
+        id: 'turn-file-change',
+        items: [
+          {
+            changes: [
+              {
+                diff: '@@ -1 +1 @@',
+                kind: {
+                  move_path: null,
+                  type: 'update',
+                },
+                path: '/workspace/project/src/config.ts',
+              },
+            ],
+            id: 'patch-1',
+            status: 'completed',
+            type: 'fileChange',
+          },
+        ],
+        status: 'completed',
+      },
+    ],
+    updatedAt: 1_710_000_120,
+  });
+
+  assert.deepEqual(thread.messages, []);
+  assert.deepEqual(
+    thread.activity.map((entry) => ({
+      detail: entry.detail,
+      kind: entry.kind,
+      summary: entry.summary,
+      title: entry.title,
+    })),
+    [
+      {
+        detail: 'updated: /workspace/project/src/config.ts\n@@ -1 +1 @@',
+        kind: 'file-change',
+        summary: '/workspace/project/src/config.ts',
+        title: '/workspace/project/src/config.ts',
+      },
+    ],
+  );
+});
+
+test('mapThread normalizes structured text payloads from app-server items', () => {
+  const thread = mapThread({
+    createdAt: 1_710_000_000,
+    cwd: '/workspace/project',
+    id: 'thr_structured_text',
+    modelProvider: 'openai',
+    name: null,
+    preview: '',
+    status: { type: 'idle' },
+    turns: [
+      {
+        id: 'turn-structured',
+        items: [
+          {
+            content: [{ type: 'text', text: { text: 'Explain the `deploy` failure' } }],
+            id: 'item-user',
+            type: 'userMessage',
+          },
+          {
+            content: [{ text: 'Found the missing env var.' }],
+            id: 'reasoning-1',
+            summary: [{ type: 'summary_text', text: '**Checking logs**' }],
+            type: 'reasoning',
+          },
+          {
+            id: 'item-assistant',
+            phase: 'final_answer',
+            text: { type: 'output_text', text: 'The `API_KEY` env var is missing.' },
+            type: 'agentMessage',
+          },
+        ],
+        status: 'completed',
+      },
+    ],
+    updatedAt: 1_710_000_120,
+  });
+
+  assert.deepEqual(
+    thread.messages.map((message) => message.content),
+    ['Explain the `deploy` failure', 'The `API_KEY` env var is missing.'],
+  );
+  assert.deepEqual(
+    thread.activity.map((entry) => ({
+      detail: entry.detail,
+      summary: entry.summary,
+    })),
+    [
+      {
+        detail: '**Checking logs**\n\nFound the missing env var.',
+        summary: '**Checking logs**',
+      },
+    ],
+  );
+});
+
 test('shouldResumeAfterTurnStartError only retries unloaded threads', () => {
   assert.equal(shouldResumeAfterTurnStartError(new Error('thread not found: thr_123')), true);
   assert.equal(shouldResumeAfterTurnStartError(new Error('no rollout found for thread id thr_123')), false);
@@ -506,6 +668,13 @@ test('isAppServerConnectionClosedError only matches established websocket discon
   assert.equal(isAppServerConnectionClosedError(new Error('App-server connection closed: ws://localhost:4222')), true);
   assert.equal(isAppServerConnectionClosedError(new Error('Unable to connect to app-server at ws://localhost:4222')), false);
   assert.equal(isAppServerConnectionClosedError(new Error('The app-server turn failed')), false);
+});
+
+test('isAppServerThreadNotFoundError only matches missing-thread responses', () => {
+  assert.equal(isAppServerThreadNotFoundError(new Error('thread not found: thr_123')), true);
+  assert.equal(isAppServerThreadNotFoundError(new Error('invalid thread id: expected uuid')), true);
+  assert.equal(isAppServerThreadNotFoundError(new Error('thread not loaded: 8e67cd9d-ed8c-424e-ade9-a9a68c388069')), true);
+  assert.equal(isAppServerThreadNotFoundError(new Error('Unable to connect to app-server at ws://localhost:4222')), false);
 });
 
 test('isAppServerTurnWaitTimeoutError only matches turn wait timeouts', () => {
@@ -583,6 +752,47 @@ test('interruptTurn reconciles an already-idle thread and surfaces the recovered
   );
 });
 
+test('getChat downgrades cached running threads when the backend no longer has them', async () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  const events: Array<Record<string, unknown>> = [];
+
+  (client as any).emit = (event: Record<string, unknown>) => {
+    events.push(event);
+  };
+  (client as any).threadCache.set('chat-missing', {
+    activity: [],
+    cwd: '/workspace/project',
+    id: 'chat-missing',
+    messages: [],
+    preview: 'Still running locally',
+    status: 'running',
+    title: 'Missing thread',
+    tokenUsageLabel: null,
+    updatedAt: '2026-03-20T00:00:00.000Z',
+  });
+  (client as any).summaryCache.set('chat-missing', {
+    cwd: '/workspace/project',
+    id: 'chat-missing',
+    preview: 'Still running locally',
+    status: 'running',
+    title: 'Missing thread',
+    updatedAt: '2026-03-20T00:00:00.000Z',
+  });
+  (client as any).readRawThread = async () => {
+    throw new Error('thread not found: chat-missing');
+  };
+
+  const thread = await client.getChat('chat-missing');
+
+  assert.equal(thread.status, 'idle');
+  assert.equal((client as any).runningTurnIds.has('chat-missing'), false);
+  assert.ok(
+    events.some(
+      (event) => event.type === 'thread' && ((event.thread as { status?: string } | undefined)?.status ?? null) === 'idle',
+    ),
+  );
+});
+
 test('foreground resume forces a reconnect when a running thread may be stale', () => {
   const client = new AppServerClient({ url: 'ws://localhost:4222' });
   let restarted = 0;
@@ -631,6 +841,22 @@ test('foreground resume restarts an existing connection after the app was backgr
 
   assert.equal(restarted, 1);
   assert.equal(nudged, 0);
+});
+
+test('pageshow ignores the initial page load but reconnects after a bfcache restore', () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  let restarted = 0;
+
+  (client as any).handleForegroundResume = (forceRestart: boolean) => {
+    if (forceRestart) {
+      restarted += 1;
+    }
+  };
+
+  (client as any).handlePageShow({ persisted: false });
+  (client as any).handlePageShow({ persisted: true });
+
+  assert.equal(restarted, 1);
 });
 
 test('sendMessage waits for completed turn output to materialize before returning the thread', async () => {
@@ -709,6 +935,7 @@ test('sendMessage waits for completed turn output to materialize before returnin
     content: 'Follow up',
     settings: {
       accessMode: 'workspace-write',
+      approvalPolicy: null,
       model: null,
       reasoningEffort: null,
       roots: ['/workspace/project'],
@@ -717,4 +944,62 @@ test('sendMessage waits for completed turn output to materialize before returnin
 
   assert.equal(readCount, 2);
   assert.equal(thread.messages[thread.messages.length - 1]?.content, 'Here is the follow-up reply.');
+});
+
+test('handleNotification emits live activity events for tool items and agent deltas', () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  const events: Array<Record<string, unknown>> = [];
+
+  (client as any).emit = (event: Record<string, unknown>) => {
+    events.push(event);
+  };
+  (client as any).queueThreadRefresh = () => undefined;
+
+  (client as any).handleNotification({
+    method: 'item/started',
+    params: {
+      item: {
+        command: 'bash -lc "npm test"',
+        cwd: '/workspace/project',
+        id: 'command-1',
+        status: 'inProgress',
+        type: 'commandExecution',
+      },
+      threadId: 'chat-1',
+      turnId: 'turn-1',
+    },
+  });
+
+  (client as any).handleNotification({
+    method: 'item/agentMessage/delta',
+    params: {
+      delta: 'Reading the README now.',
+      itemId: 'reply-1',
+      threadId: 'chat-1',
+      turnId: 'turn-1',
+    },
+  });
+
+  assert.deepEqual(events, [
+    {
+      chatId: 'chat-1',
+      entry: {
+        detail: 'Command: bash -lc "npm test"\nDirectory: /workspace/project',
+        id: 'command-1',
+        kind: 'command',
+        status: 'in-progress',
+        summary: 'bash -lc "npm test"',
+        title: 'bash -lc "npm test"',
+        turnId: 'turn-1',
+      },
+      type: 'activity-upsert',
+    },
+    {
+      chatId: 'chat-1',
+      delta: 'Reading the README now.',
+      entryId: 'reply-1',
+      turnId: 'turn-1',
+      type: 'activity-delta',
+    },
+  ]);
 });

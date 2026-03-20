@@ -444,6 +444,7 @@ export const RuntimeSettingsSheet = ({
               onClick={() =>
                 onSubmit({
                   accessMode,
+                  approvalPolicy: settings.approvalPolicy,
                   model: settings.model,
                   reasoningEffort: settings.reasoningEffort,
                   roots: selectedRoots,

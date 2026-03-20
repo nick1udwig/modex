@@ -3,6 +3,7 @@ import type {
   ActivityEntry,
   ActivityStatus,
   ApprovalDecision,
+  ApprovalPolicy,
   ApprovalRequest,
   ChatRuntimeSettings,
   ChatStatus,
@@ -39,7 +40,7 @@ const TURN_MATERIALIZATION_POLL_MS = 350;
 const TURN_MATERIALIZATION_TIMEOUT_MS = 15_000;
 
 interface AppServerConfig {
-  approvalPolicy?: 'untrusted' | 'on-failure' | 'on-request' | 'never';
+  approvalPolicy?: ApprovalPolicy;
   cwd?: string;
   model?: string;
   modelProvider?: string;
@@ -144,24 +145,24 @@ type RawThreadItem =
   | {
       id: string;
       phase?: string | null;
-      text: string;
+      text: unknown;
       type: 'agentMessage';
     }
   | {
       id: string;
-      text: string;
+      text: unknown;
       type: 'plan';
     }
   | {
-      content?: string[] | null;
+      content?: unknown[] | null;
       id: string;
-      summary?: string[] | null;
+      summary?: unknown[] | null;
       type: 'reasoning';
     }
   | {
-      aggregatedOutput?: string | null;
-      command?: string | null;
-      cwd?: string | null;
+      aggregatedOutput?: unknown;
+      command?: unknown;
+      cwd?: unknown;
       exitCode?: number | null;
       id: string;
       status?: 'completed' | 'declined' | 'failed' | 'inProgress' | null;
@@ -169,9 +170,9 @@ type RawThreadItem =
     }
   | {
       changes?: Array<{
-        diff?: string | null;
-        kind?: string | null;
-        path?: string | null;
+        diff?: unknown;
+        kind?: unknown;
+        path?: unknown;
       }> | null;
       id: string;
       status?: 'completed' | 'declined' | 'failed' | 'inProgress' | null;
@@ -184,25 +185,25 @@ type RawThreadItem =
 
 type RawUserInput =
   | {
-      text: string;
+      text: unknown;
       type: 'text';
     }
   | {
       type: 'image';
-      url: string;
+      url: unknown;
     }
   | {
-      path: string;
+      path: unknown;
       type: 'localImage';
     }
   | {
-      name: string;
-      path: string;
+      name: unknown;
+      path: unknown;
       type: 'skill';
     }
   | {
-      name: string;
-      path: string;
+      name: unknown;
+      path: unknown;
       type: 'mention';
     };
 
@@ -411,7 +412,84 @@ const omitUndefined = <T extends Record<string, unknown>>(value: T) =>
   Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 
 const isoFromSeconds = (seconds: number) => new Date(seconds * 1000).toISOString();
-const compactSummaryText = (text: string) => text.replace(/\s+/g, ' ').trim();
+const textFragmentFromUnknown = (value: unknown): string => {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => textFragmentFromUnknown(entry)).join('');
+  }
+
+  if (!value || typeof value !== 'object') {
+    return '';
+  }
+
+  const record = value as Record<string, unknown>;
+
+  if ('text' in record) {
+    return textFragmentFromUnknown(record.text);
+  }
+
+  if ('content' in record) {
+    return textFragmentFromUnknown(record.content);
+  }
+
+  return '';
+};
+
+const textSectionFromUnknown = (value: unknown) => textFragmentFromUnknown(value).trim();
+
+const textSectionsFromUnknown = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => textSectionFromUnknown(entry)).filter((entry) => entry.length > 0);
+  }
+
+  const section = textSectionFromUnknown(value);
+  return section.length > 0 ? [section] : [];
+};
+
+const compactSummaryText = (text: unknown) => textSectionFromUnknown(text).replace(/\s+/g, ' ').trim();
+
+const fileChangeKindText = (value: unknown) => {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  if (!value || typeof value !== 'object') {
+    return '';
+  }
+
+  const record = value as Record<string, unknown>;
+  const kind = textSectionFromUnknown(record.type ?? record.kind);
+  const movePath = textSectionFromUnknown(record.move_path ?? record.movePath);
+
+  if (!kind) {
+    return '';
+  }
+
+  if (kind === 'move') {
+    return movePath ? `moved to ${movePath}` : 'moved';
+  }
+
+  if (kind === 'update') {
+    return 'updated';
+  }
+
+  if (kind === 'create') {
+    return 'created';
+  }
+
+  if (kind === 'delete') {
+    return 'deleted';
+  }
+
+  return kind;
+};
 
 const normalizeRoots = (roots: string[]) => {
   const seen = new Set<string>();
@@ -442,6 +520,9 @@ const normalizeAccessMode = (settings: ChatRuntimeSettings | undefined, config: 
 
   return 'workspace-write';
 };
+
+const normalizeApprovalPolicy = (settings: ChatRuntimeSettings | undefined, config: AppServerConfig) =>
+  settings?.approvalPolicy ?? config.approvalPolicy;
 
 const coarseSandboxMode = (
   accessMode: AccessMode,
@@ -486,7 +567,7 @@ const buildThreadStartParams = (config: AppServerConfig, settings: ChatRuntimeSe
   const accessMode = normalizeAccessMode(settings, config);
 
   return omitUndefined({
-    approvalPolicy: config.approvalPolicy,
+    approvalPolicy: normalizeApprovalPolicy(settings, config),
     cwd: primaryRoot(settings, config.cwd),
     experimentalRawEvents: false,
     model: settings?.model ?? config.model,
@@ -504,7 +585,7 @@ const buildThreadResumeParams = (
   const accessMode = normalizeAccessMode(settings, config);
 
   return omitUndefined({
-    approvalPolicy: config.approvalPolicy,
+    approvalPolicy: normalizeApprovalPolicy(settings, config),
     cwd: primaryRoot(settings, config.cwd),
     model: settings?.model ?? config.model,
     modelProvider: config.modelProvider,
@@ -577,7 +658,7 @@ const buildTurnStartParams = (
   payload: SendMessagePayload,
 ) =>
   omitUndefined({
-    approvalPolicy: config.approvalPolicy,
+    approvalPolicy: normalizeApprovalPolicy(payload.settings, config),
     cwd: primaryRoot(payload.settings, config.cwd),
     effort: payload.settings?.reasoningEffort ?? undefined,
     input: buildTurnInputs(payload.content, payload.attachments ?? []),
@@ -591,6 +672,12 @@ const compactPreview = (text: string) => compactSummaryText(text) || 'Start a ne
 export const shouldResumeAfterTurnStartError = (error: unknown) =>
   error instanceof Error && error.message.includes('thread not found:');
 
+export const isAppServerThreadNotFoundError = (error: unknown) =>
+  error instanceof Error &&
+  (error.message.includes('thread not found:') ||
+    error.message.includes('invalid thread id:') ||
+    error.message.includes('thread not loaded:'));
+
 const isAppServerUnavailableError = (error: unknown) =>
   error instanceof Error && error.message.startsWith('Unable to connect to app-server at ');
 
@@ -600,7 +687,7 @@ const sleep = (durationMs: number) =>
   });
 
 const detailLine = (label: string, value: string | null | undefined) => {
-  const text = value?.trim();
+  const text = textSectionFromUnknown(value);
   return text ? `${label}: ${text}` : null;
 };
 
@@ -877,10 +964,11 @@ const activityEntryFromItem = (
   turnId: string,
   options?: {
     fallbackStatus?: ActivityStatus;
+    includeVisibleAgentMessages?: boolean;
   },
 ): ActivityEntry | null => {
-  if (isCommentaryAgentMessageItem(item)) {
-    const detail = item.text.trim();
+  if (isCommentaryAgentMessageItem(item) || (options?.includeVisibleAgentMessages && isVisibleAgentMessageItem(item))) {
+    const detail = textSectionFromUnknown(item.text);
     if (!detail) {
       return null;
     }
@@ -891,13 +979,13 @@ const activityEntryFromItem = (
       kind: 'commentary',
       status: options?.fallbackStatus ?? 'completed',
       summary: compactPreview(detail),
-      title: 'Agent update',
+      title: isCommentaryAgentMessageItem(item) ? 'Agent update' : 'Draft reply',
       turnId,
     } satisfies ActivityEntry;
   }
 
   if (isPlanItem(item)) {
-    const detail = item.text.trim();
+    const detail = textSectionFromUnknown(item.text);
     if (!detail) {
       return null;
     }
@@ -914,9 +1002,7 @@ const activityEntryFromItem = (
   }
 
   if (isReasoningItem(item)) {
-    const sections = [...(item.summary ?? []), ...(item.content ?? [])]
-      .map((section) => section.trim())
-      .filter((section) => section.length > 0);
+    const sections = [...textSectionsFromUnknown(item.summary ?? []), ...textSectionsFromUnknown(item.content ?? [])];
 
     if (sections.length === 0) {
       return null;
@@ -934,9 +1020,9 @@ const activityEntryFromItem = (
   }
 
   if (isCommandExecutionItem(item)) {
-    const command = item.command?.trim() ?? '';
-    const cwd = item.cwd?.trim() ?? '';
-    const output = item.aggregatedOutput?.trim() ?? '';
+    const command = textSectionFromUnknown(item.command);
+    const cwd = textSectionFromUnknown(item.cwd);
+    const output = textSectionFromUnknown(item.aggregatedOutput);
     const detailLines = [
       command ? `Command: ${command}` : null,
       cwd ? `Directory: ${cwd}` : null,
@@ -959,9 +1045,9 @@ const activityEntryFromItem = (
   if (isFileChangeItem(item)) {
     const changes = (item.changes ?? [])
       .map((change) => {
-        const path = change.path?.trim() ?? '';
-        const kind = change.kind?.trim() ?? '';
-        const diff = change.diff?.trim() ?? '';
+        const path = textSectionFromUnknown(change.path);
+        const kind = fileChangeKindText(change.kind);
+        const diff = textSectionFromUnknown(change.diff);
         if (!path) {
           return null;
         }
@@ -975,7 +1061,7 @@ const activityEntryFromItem = (
     }
 
     const fileList = (item.changes ?? [])
-      .map((change) => change.path?.trim() ?? '')
+      .map((change) => textSectionFromUnknown(change.path))
       .filter((path): path is string => path.length > 0);
 
     return {
@@ -997,58 +1083,11 @@ const mapThreadActivity = (thread: RawThread): ActivityEntry[] =>
     turn.items.flatMap<ActivityEntry>((item) => {
       const entry = activityEntryFromItem(item, turn.id, {
         fallbackStatus: turn.status === 'inProgress' ? 'in-progress' : 'completed',
+        includeVisibleAgentMessages: turn.status === 'inProgress',
       });
       return entry ? [entry] : [];
     }),
   );
-
-const progressMessageFromActivity = (entry: ActivityEntry, createdAt: string): Message | null => {
-  const body = entry.detail.trim();
-  let content = body;
-
-  switch (entry.kind) {
-    case 'plan':
-      content = body ? `Plan\n${body}` : 'Plan';
-      break;
-    case 'reasoning':
-      content = body ? `Reasoning\n${body}` : 'Reasoning';
-      break;
-    case 'command': {
-      const prefix =
-        entry.status === 'failed'
-          ? 'Command failed'
-          : entry.status === 'completed'
-            ? 'Command finished'
-            : 'Running command';
-      content = `${prefix}: ${entry.title}${body ? `\n${body}` : ''}`;
-      break;
-    }
-    case 'file-change': {
-      const prefix =
-        entry.status === 'failed'
-          ? 'File changes failed'
-          : entry.status === 'completed'
-            ? 'Prepared file changes'
-            : 'Preparing file changes';
-      content = `${prefix}: ${entry.title}${body ? `\n${body}` : ''}`;
-      break;
-    }
-    default:
-      break;
-  }
-
-  if (compactSummaryText(content).length === 0) {
-    return null;
-  }
-
-  return {
-    content,
-    createdAt,
-    id: entry.id,
-    role: 'assistant',
-    turnId: entry.turnId,
-  };
-};
 
 const turnHasRenderableOutput = (turn: RawTurn) =>
   turn.items.some((item) => {
@@ -1133,15 +1172,22 @@ export const flattenUserInputs = (inputs: RawUserInput[]) =>
     .map((input) => {
       switch (input.type) {
         case 'text':
-          return input.text.trim();
-        case 'image':
-          return `[Image] ${input.url}`;
-        case 'localImage':
-          return `[Local image] ${input.path}`;
-        case 'skill':
-          return `$${input.name}`;
-        case 'mention':
-          return `@${input.name}`;
+          return textSectionFromUnknown(input.text);
+        case 'image': {
+          return '[Image] Uploaded photo';
+        }
+        case 'localImage': {
+          const path = textSectionFromUnknown(input.path);
+          return path ? `[Local image] ${path}` : '[Local image]';
+        }
+        case 'skill': {
+          const name = textSectionFromUnknown(input.name);
+          return name ? `$${name}` : '';
+        }
+        case 'mention': {
+          const name = textSectionFromUnknown(input.name);
+          return name ? `@${name}` : '';
+        }
         default:
           return '';
       }
@@ -1182,7 +1228,11 @@ export const mapThreadMessages = (thread: RawThread): Message[] => {
       }
 
       if (isVisibleAgentMessageItem(item)) {
-        const content = item.text.trim();
+        if (turn.status === 'inProgress') {
+          continue;
+        }
+
+        const content = textSectionFromUnknown(item.text);
         if (content.length === 0) {
           continue;
         }
@@ -1198,20 +1248,6 @@ export const mapThreadMessages = (thread: RawThread): Message[] => {
         continue;
       }
 
-      if (turn.status !== 'inProgress') {
-        continue;
-      }
-
-      const activityEntry = activityEntryFromItem(item, turn.id, { fallbackStatus: 'in-progress' });
-      const progressMessage = activityEntry
-        ? progressMessageFromActivity(activityEntry, messageTimestamp(thread.createdAt, offset))
-        : null;
-      if (!progressMessage) {
-        continue;
-      }
-
-      messages.push(progressMessage);
-      offset += 1;
     }
   }
 
@@ -1496,6 +1532,13 @@ export class AppServerClient implements RemoteAppClient {
     this.wasBackgrounded = false;
     this.handleForegroundResume(shouldRestartConnection);
   };
+  private readonly handlePageShow = (event: PageTransitionEvent) => {
+    if (!event.persisted) {
+      return;
+    }
+
+    this.handleForegroundResume(true);
+  };
   private readonly handleReconnectSignal = () => {
     this.handleForegroundResume(true);
   };
@@ -1543,9 +1586,22 @@ export class AppServerClient implements RemoteAppClient {
   }
 
   async getChat(chatId: string) {
-    const rawThread = await this.readRawThread(chatId);
-    const thread = this.storeMappedThread(rawThread);
-    return thread;
+    try {
+      const rawThread = await this.readRawThread(chatId);
+      const thread = this.storeMappedThread(rawThread);
+      return thread;
+    } catch (error) {
+      if (!isAppServerThreadNotFoundError(error)) {
+        throw error;
+      }
+
+      const thread = this.markThreadIdleIfCached(chatId);
+      if (thread) {
+        return thread;
+      }
+
+      throw error;
+    }
   }
 
   async listChats() {
@@ -1637,11 +1693,20 @@ export class AppServerClient implements RemoteAppClient {
     const connection = await this.ensureConnection();
     let turnId: string | null = this.runningTurnIds.get(chatId) ?? null;
     if (!turnId) {
-      const rawThread = await this.readRawThread(chatId);
-      this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
-      turnId = findActiveTurnId(rawThread);
-      if (!turnId) {
-        return;
+      try {
+        const rawThread = await this.readRawThread(chatId);
+        this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
+        turnId = findActiveTurnId(rawThread);
+        if (!turnId) {
+          return;
+        }
+      } catch (error) {
+        if (isAppServerThreadNotFoundError(error)) {
+          this.markThreadIdleIfCached(chatId);
+          return;
+        }
+
+        throw error;
       }
     }
 
@@ -1837,7 +1902,7 @@ export class AppServerClient implements RemoteAppClient {
     }
 
     window.addEventListener('online', this.handleReconnectSignal);
-    window.addEventListener('pageshow', this.handleReconnectSignal);
+    window.addEventListener('pageshow', this.handlePageShow);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     this.reconnectSignalsBound = true;
   }
@@ -1848,7 +1913,7 @@ export class AppServerClient implements RemoteAppClient {
     }
 
     window.removeEventListener('online', this.handleReconnectSignal);
-    window.removeEventListener('pageshow', this.handleReconnectSignal);
+    window.removeEventListener('pageshow', this.handlePageShow);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     this.reconnectSignalsBound = false;
   }
@@ -2116,8 +2181,18 @@ export class AppServerClient implements RemoteAppClient {
           return;
         }
 
-        const message = this.mapLiveMessage(params.item, params.turnId);
         this.queueThreadRefresh(params.threadId);
+        const activity = this.mapLiveActivityEntry(params.item, params.turnId, 'in-progress');
+        if (activity) {
+          this.emit({
+            chatId: params.threadId,
+            entry: activity,
+            type: 'activity-upsert',
+          });
+          return;
+        }
+
+        const message = this.mapLiveMessage(params.item, params.turnId);
         if (!message) {
           return;
         }
@@ -2140,8 +2215,9 @@ export class AppServerClient implements RemoteAppClient {
         this.emit({
           chatId: params.threadId,
           delta: params.delta,
-          messageId: params.itemId,
-          type: 'message-delta',
+          entryId: params.itemId,
+          turnId: params.turnId,
+          type: 'activity-delta',
         });
         return;
       }
@@ -2152,8 +2228,18 @@ export class AppServerClient implements RemoteAppClient {
           return;
         }
 
-        const message = this.mapLiveMessage(params.item, params.turnId);
         this.queueThreadRefresh(params.threadId);
+        const activity = this.mapLiveActivityEntry(params.item, params.turnId, 'completed');
+        if (activity) {
+          this.emit({
+            chatId: params.threadId,
+            entry: activity,
+            type: 'activity-upsert',
+          });
+          return;
+        }
+
+        const message = this.mapLiveMessage(params.item, params.turnId);
         if (!message) {
           return;
         }
@@ -2363,13 +2449,25 @@ export class AppServerClient implements RemoteAppClient {
       return null;
     }
 
+    const content = textSectionFromUnknown(item.text);
+    if (content.length === 0) {
+      return null;
+    }
+
     return {
-      content: item.text,
+      content,
       createdAt: new Date().toISOString(),
       id: item.id,
       role: 'assistant',
       turnId,
     };
+  }
+
+  private mapLiveActivityEntry(item: RawThreadItem, turnId: string, fallbackStatus: ActivityStatus) {
+    return activityEntryFromItem(item, turnId, {
+      fallbackStatus,
+      includeVisibleAgentMessages: true,
+    });
   }
 
   private mergeThread(thread: ChatThread) {
@@ -2495,6 +2593,31 @@ export class AppServerClient implements RemoteAppClient {
     this.syncThreadRefreshTimer();
   }
 
+  private markThreadIdleIfCached(threadId: string) {
+    this.runningTurnIds.delete(threadId);
+    this.clearPendingRequestsForChat(threadId);
+
+    const cachedThread = this.threadCache.get(threadId);
+    if (cachedThread) {
+      const nextThread = {
+        ...cachedThread,
+        status: 'idle' as const,
+      };
+      this.storeThread(nextThread);
+      return nextThread;
+    }
+
+    const cachedSummary = this.summaryCache.get(threadId);
+    if (cachedSummary && cachedSummary.status !== 'idle') {
+      this.storeSummary({
+        ...cachedSummary,
+        status: 'idle',
+      });
+    }
+
+    return null;
+  }
+
   private async refreshThread(threadId: string, options?: { suppressError?: boolean }) {
     if (this.refreshingThreadIds.has(threadId)) {
       return;
@@ -2506,6 +2629,11 @@ export class AppServerClient implements RemoteAppClient {
       const rawThread = await this.readRawThread(threadId);
       this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
     } catch (error) {
+      if (isAppServerThreadNotFoundError(error)) {
+        this.markThreadIdleIfCached(threadId);
+        return;
+      }
+
       if (!options?.suppressError) {
         this.emit({
           chatId: threadId,

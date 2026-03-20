@@ -2,12 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ChatSummary, ChatThread } from '../src/app/types.ts';
 import {
+  appendLiveActivityDelta,
   defaultOpenTabs,
+  deriveLiveActivity,
+  downgradeMissingThread,
   ensureTab,
+  mergeLiveActivity,
   mergeBootstrapThread,
   mergeThreadSummary,
+  sanitizeBootstrapThread,
   setTabStatusIfOpen,
   setTabUnreadIfOpen,
+  shouldHoldIdleStatusUntilThreadSync,
+  upsertLiveActivity,
   updateChatSummary,
 } from '../src/state/modexState.ts';
 
@@ -246,4 +253,237 @@ test('mergeBootstrapThread prefers hydrated backend state when cached data is ol
   };
 
   assert.deepEqual(mergeBootstrapThread(hydrated, current), hydrated);
+});
+
+test('deriveLiveActivity keeps only running entries for the live stack', () => {
+  assert.deepEqual(
+    deriveLiveActivity({
+      activity: [
+        {
+          detail: 'Inspecting',
+          id: 'entry-complete',
+          kind: 'commentary',
+          status: 'completed',
+          summary: 'Inspecting',
+          title: 'Agent update',
+          turnId: 'turn-1',
+        },
+        {
+          detail: 'Running tests',
+          id: 'entry-live',
+          kind: 'commentary',
+          status: 'in-progress',
+          summary: 'Running tests',
+          title: 'Draft reply',
+          turnId: 'turn-2',
+        },
+      ],
+      status: 'running',
+    }),
+    [
+      {
+        detail: 'Running tests',
+        id: 'entry-live',
+        kind: 'commentary',
+        status: 'in-progress',
+        summary: 'Running tests',
+        title: 'Draft reply',
+        turnId: 'turn-2',
+      },
+    ],
+  );
+});
+
+test('upsertLiveActivity and appendLiveActivityDelta preserve the newest live detail', () => {
+  const seeded = upsertLiveActivity([], {
+    detail: 'Checking the command output',
+    id: 'entry-live',
+    kind: 'commentary',
+    status: 'in-progress',
+    summary: 'Checking the command output',
+    title: 'Draft reply',
+    turnId: 'turn-2',
+  });
+
+  assert.deepEqual(
+    appendLiveActivityDelta(seeded, {
+      delta: ' before I answer.',
+      entryId: 'entry-live',
+      turnId: 'turn-2',
+    }),
+    [
+      {
+        detail: 'Checking the command output before I answer.',
+        id: 'entry-live',
+        kind: 'commentary',
+        status: 'in-progress',
+        summary: 'Checking the command output before I answer.',
+        title: 'Draft reply',
+        turnId: 'turn-2',
+      },
+    ],
+  );
+});
+
+test('mergeLiveActivity keeps local completed cards until the backend thread settles', () => {
+  assert.deepEqual(
+    mergeLiveActivity(
+      [
+        {
+          detail: 'Command: bash -lc "npm test"',
+          id: 'tool-1',
+          kind: 'command',
+          status: 'completed',
+          summary: 'bash -lc "npm test"',
+          title: 'bash -lc "npm test"',
+          turnId: 'turn-2',
+        },
+      ],
+      [
+        {
+          detail: 'Looking at the repo',
+          id: 'entry-live',
+          kind: 'commentary',
+          status: 'in-progress',
+          summary: 'Looking at the repo',
+          title: 'Draft reply',
+          turnId: 'turn-2',
+        },
+      ],
+    ),
+    [
+      {
+        detail: 'Command: bash -lc "npm test"',
+        id: 'tool-1',
+        kind: 'command',
+        status: 'completed',
+        summary: 'bash -lc "npm test"',
+        title: 'bash -lc "npm test"',
+        turnId: 'turn-2',
+      },
+      {
+        detail: 'Looking at the repo',
+        id: 'entry-live',
+        kind: 'commentary',
+        status: 'in-progress',
+        summary: 'Looking at the repo',
+        title: 'Draft reply',
+        turnId: 'turn-2',
+      },
+    ],
+  );
+});
+
+test('downgradeMissingThread clears stale running state when the backend no longer knows the thread', () => {
+  assert.deepEqual(
+    downgradeMissingThread({
+      activity: [],
+      cwd: '/workspace/modex',
+      id: 'chat-missing',
+      messages: [],
+      preview: 'Stale running preview',
+      status: 'running',
+      title: 'Stale chat',
+      tokenUsageLabel: null,
+      updatedAt: '2026-03-20T00:00:00.000Z',
+    }),
+    {
+      activity: [],
+      cwd: '/workspace/modex',
+      id: 'chat-missing',
+      messages: [],
+      preview: 'Stale running preview',
+      status: 'idle',
+      title: 'Stale chat',
+      tokenUsageLabel: null,
+      updatedAt: '2026-03-20T00:00:00.000Z',
+    },
+  );
+});
+
+test('sanitizeBootstrapThread clears cached running state that has no live evidence', () => {
+  assert.deepEqual(
+    sanitizeBootstrapThread({
+      activity: [],
+      cwd: '/workspace/modex',
+      id: 'chat-bootstrap',
+      messages: [
+        {
+          content: 'Earlier final reply',
+          createdAt: '2026-03-20T00:00:00.000Z',
+          id: 'msg-1',
+          role: 'assistant',
+          turnId: 'turn-1',
+        },
+      ],
+      preview: 'Earlier final reply',
+      status: 'running',
+      title: 'Cached chat',
+      tokenUsageLabel: null,
+      updatedAt: '2026-03-20T00:00:00.000Z',
+    }),
+    {
+      activity: [],
+      cwd: '/workspace/modex',
+      id: 'chat-bootstrap',
+      messages: [
+        {
+          content: 'Earlier final reply',
+          createdAt: '2026-03-20T00:00:00.000Z',
+          id: 'msg-1',
+          role: 'assistant',
+          turnId: 'turn-1',
+        },
+      ],
+      preview: 'Earlier final reply',
+      status: 'idle',
+      title: 'Cached chat',
+      tokenUsageLabel: null,
+      updatedAt: '2026-03-20T00:00:00.000Z',
+    },
+  );
+});
+
+test('shouldHoldIdleStatusUntilThreadSync keeps live stacks visible until the final thread arrives', () => {
+  assert.equal(
+    shouldHoldIdleStatusUntilThreadSync(
+      {
+        messages: [
+          {
+            content: 'Question',
+            createdAt: '2026-03-20T00:00:00.000Z',
+            id: 'msg-1',
+            role: 'user',
+            turnId: 'turn-1',
+          },
+        ],
+        status: 'running',
+      },
+      [
+        {
+          detail: 'Inspecting files',
+          id: 'entry-1',
+          kind: 'commentary',
+          status: 'in-progress',
+          summary: 'Inspecting files',
+          title: 'Thinking',
+          turnId: 'turn-2',
+        },
+      ],
+      'idle',
+    ),
+    true,
+  );
+
+  assert.equal(
+    shouldHoldIdleStatusUntilThreadSync(
+      {
+        messages: [],
+        status: 'running',
+      },
+      [],
+      'idle',
+    ),
+    false,
+  );
 });

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { SlashCommandSuggestion } from '../app/slashCommands';
 import type { AccessMode, ApprovalDecision, InteractionRequest, PendingAttachment } from '../app/types';
 import { Icon } from './Icon';
 import { InteractionPrompt } from './InteractionPrompt';
@@ -26,6 +27,7 @@ interface ComposerProps {
   onSearchNext: () => void;
   onSearchPrevious: () => void;
   onSearchQueryChange: (value: string) => void;
+  onExecuteSlashCommand: (suggestion: SlashCommandSuggestion) => void;
   onSend: () => void;
   onRemoveAttachment: (attachmentId: string) => void;
   onStopRun: () => void;
@@ -39,6 +41,7 @@ interface ComposerProps {
   searchActive: boolean;
   searchHitLabel: string | null;
   searchQuery: string;
+  slashCommands: SlashCommandSuggestion[];
 }
 
 export const Composer = ({
@@ -62,6 +65,7 @@ export const Composer = ({
   onSearchNext,
   onSearchPrevious,
   onSearchQueryChange,
+  onExecuteSlashCommand,
   onSend,
   onRemoveAttachment,
   onStopRun,
@@ -75,11 +79,13 @@ export const Composer = ({
   searchActive,
   searchHitLabel,
   searchQuery,
+  slashCommands,
 }: ComposerProps) => {
   const composerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [slashSelectionIndex, setSlashSelectionIndex] = useState(0);
   const hasDraft = draft.trim().length > 0;
   const voiceProcessing = recordingStatus === 'processing';
   const showStop = busy && !recording;
@@ -126,6 +132,16 @@ export const Composer = ({
       setMenuOpen(false);
     }
   }, [searchActive]);
+
+  useEffect(() => {
+    setSlashSelectionIndex((current) => {
+      if (slashCommands.length === 0) {
+        return 0;
+      }
+
+      return Math.min(current, slashCommands.length - 1);
+    });
+  }, [slashCommands]);
 
   return (
     <div ref={composerRef} className={`composer-shell ${searchActive ? 'composer-shell--search' : ''}`}>
@@ -196,8 +212,27 @@ export const Composer = ({
                 return;
               }
 
+              if (slashCommands.length > 0) {
+                if (event.key === 'ArrowDown') {
+                  event.preventDefault();
+                  setSlashSelectionIndex((current) => (current + 1) % slashCommands.length);
+                  return;
+                }
+
+                if (event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  setSlashSelectionIndex((current) => (current - 1 + slashCommands.length) % slashCommands.length);
+                  return;
+                }
+              }
+
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
+                if (slashCommands.length > 0) {
+                  onExecuteSlashCommand(slashCommands[slashSelectionIndex] ?? slashCommands[0]);
+                  return;
+                }
+
                 if (hasDraft && !busy) {
                   onSend();
                 }
@@ -246,6 +281,23 @@ export const Composer = ({
           </button>
         </div>
       </div>
+
+      {!searchActive && slashCommands.length > 0 ? (
+        <div className="composer-slash" aria-label="Slash command suggestions">
+          {slashCommands.map((suggestion, index) => (
+            <button
+              key={suggestion.id}
+              className={`composer-slash__item ${index === slashSelectionIndex ? 'composer-slash__item--active' : ''}`}
+              type="button"
+              onClick={() => onExecuteSlashCommand(suggestion)}
+            >
+              <span className="composer-slash__command">{suggestion.command}</span>
+              <span className="composer-slash__label">{suggestion.label}</span>
+              <span className="composer-slash__description">{suggestion.description}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <input
         ref={fileInputRef}

@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
+import { liveActivityHeadline } from '../app/liveActivityPresentation';
+import { renderMessageMarkdown } from '../app/messageMarkdown';
+import { messageMenuViewport, positionMessageMenu } from '../app/messageMenuPosition';
 import type { ActivityEntry, ChatThread, ModelOption, ReasoningEffort } from '../app/types';
-import { HighlightedText } from './HighlightedText';
 import { Icon } from './Icon';
+import { LiveActivityStack } from './LiveActivityStack';
 
 interface ConversationViewProps {
   activeSearchHitId?: string | null;
   busy: boolean;
   chat: ChatThread | null;
+  liveActivity: ActivityEntry[];
   loading: boolean;
   modelOptions: ModelOption[];
   onSelectModel: (modelId: string) => void;
@@ -37,6 +41,22 @@ const messageLabel = (role: ChatThread['messages'][number]['role']) => {
 
 const LONG_PRESS_MS = 380;
 const LONG_PRESS_MOVE_THRESHOLD = 12;
+const MESSAGE_MENU_ESTIMATE = {
+  height: 112,
+  width: 180,
+};
+
+interface MessageMenuState {
+  anchorRect: {
+    bottom: number;
+    left: number;
+    right: number;
+    top: number;
+  };
+  menuLeft: number;
+  menuTop: number;
+  messageId: string;
+}
 
 const formatReasoningEffort = (effort: ReasoningEffort | null) => (effort ? effort.replace(/^./, (letter) => letter.toUpperCase()) : 'Default');
 
@@ -79,10 +99,13 @@ const clearNativeSelection = () => {
   selection.removeAllRanges();
 };
 
+const currentMenuViewport = () => messageMenuViewport(window);
+
 export const ConversationView = ({
   activeSearchHitId = null,
   busy,
   chat,
+  liveActivity,
   loading,
   modelOptions,
   onSelectModel,
@@ -92,32 +115,23 @@ export const ConversationView = ({
   selectedReasoningEffort,
 }: ConversationViewProps) => {
   const bottomRef = useRef<HTMLDivElement | null>(null);
-  const messageBodyNodesRef = useRef<Record<string, HTMLParagraphElement | null>>({});
+  const messageMenuRef = useRef<HTMLDivElement | null>(null);
   const messageNodesRef = useRef<Record<string, HTMLDivElement | null>>({});
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const longPressRef = useRef<{
     messageId: string;
-    mode: 'menu' | 'selection';
     pointerId: number;
     startX: number;
     startY: number;
     timeoutId: number;
     triggered: boolean;
   } | null>(null);
-  const suppressContextMenuRef = useRef<{
-    expiresAt: number;
-    messageId: string;
-  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [detailsMessageId, setDetailsMessageId] = useState<string | null>(null);
   const [detailsStackExpanded, setDetailsStackExpanded] = useState(false);
   const [expandedStackMessageId, setExpandedStackMessageId] = useState<string | null>(null);
-  const [messageMenu, setMessageMenu] = useState<{
-    menuLeft: number;
-    menuTop: number;
-    messageId: string;
-  } | null>(null);
+  const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [selectionMessageId, setSelectionMessageId] = useState<string | null>(null);
   const selectedModel = modelOptions.find((model) => model.id === selectedModelId) ?? modelOptions[0] ?? null;
@@ -265,16 +279,51 @@ export const ConversationView = ({
     const handleReposition = () => {
       setMessageMenu(null);
       setDetailsMessageId(null);
+      setSelectionMessageId(null);
     };
 
     const listNode = messageListRef.current;
+    const visualViewport = window.visualViewport;
     listNode?.addEventListener('scroll', handleReposition);
     window.addEventListener('resize', handleReposition);
+    visualViewport?.addEventListener('resize', handleReposition);
+    visualViewport?.addEventListener('scroll', handleReposition);
 
     return () => {
       listNode?.removeEventListener('scroll', handleReposition);
       window.removeEventListener('resize', handleReposition);
+      visualViewport?.removeEventListener('resize', handleReposition);
+      visualViewport?.removeEventListener('scroll', handleReposition);
     };
+  }, [messageMenu]);
+
+  useEffect(() => {
+    if (!messageMenu || !messageMenuRef.current) {
+      return;
+    }
+
+    const nextPosition = positionMessageMenu(
+      messageMenu.anchorRect,
+      {
+        height: messageMenuRef.current.offsetHeight,
+        width: messageMenuRef.current.offsetWidth,
+      },
+      currentMenuViewport(),
+    );
+
+    if (nextPosition.left === messageMenu.menuLeft && nextPosition.top === messageMenu.menuTop) {
+      return;
+    }
+
+    setMessageMenu((current) =>
+      current && current.messageId === messageMenu.messageId
+        ? {
+            ...current,
+            menuLeft: nextPosition.left,
+            menuTop: nextPosition.top,
+          }
+        : current,
+    );
   }, [messageMenu]);
 
   const cancelLongPress = () => {
@@ -290,48 +339,29 @@ export const ConversationView = ({
     const node = messageNodesRef.current[messageId];
     const rect = node?.getBoundingClientRect();
     clearNativeSelection();
-    setSelectionMessageId(null);
     setDetailsMessageId(null);
     if (!rect) {
       return;
     }
 
-    setMessageMenu({
-      menuLeft: Math.min(window.innerWidth - 188, Math.max(16, rect.left)),
-      menuTop: rect.bottom + 10 > window.innerHeight - 220 ? Math.max(16, rect.top - 164) : rect.bottom + 10,
-      messageId,
-    });
-  };
-
-  const enableMessageSelection = (messageId: string, options?: { preserveMenu?: boolean }) => {
-    const bodyNode = messageBodyNodesRef.current[messageId];
-    clearNativeSelection();
-    if (!options?.preserveMenu) {
-      setMessageMenu(null);
-    }
-    setDetailsMessageId(null);
-    setSelectionMessageId(messageId);
-    setNotice('Text selection enabled');
-    suppressContextMenuRef.current = {
-      expiresAt: Date.now() + 900,
-      messageId,
+    const anchorRect = {
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
     };
-
-    if (!bodyNode) {
-      return;
-    }
-
-    window.requestAnimationFrame(() => {
-      const selection = window.getSelection();
-      if (!selection) {
-        return;
-      }
-
-      const range = document.createRange();
-      range.selectNodeContents(bodyNode);
-      selection.removeAllRanges();
-      selection.addRange(range);
+    const position = positionMessageMenu(
+      anchorRect,
+      MESSAGE_MENU_ESTIMATE,
+      currentMenuViewport(),
+    );
+    setMessageMenu({
+      anchorRect,
+      menuLeft: position.left,
+      menuTop: position.top,
+      messageId,
     });
+    setSelectionMessageId(messageId);
   };
 
   const handleMessagePointerDown = (event: PointerEvent<HTMLDivElement>, messageId: string) => {
@@ -344,13 +374,9 @@ export const ConversationView = ({
       return;
     }
 
-    const longPressMode: 'menu' | 'selection' =
-      messageMenu?.messageId === messageId && target.closest('.message-card__body') ? 'selection' : 'menu';
-
     cancelLongPress();
     longPressRef.current = {
       messageId,
-      mode: longPressMode,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
@@ -360,11 +386,6 @@ export const ConversationView = ({
         }
 
         longPressRef.current.triggered = true;
-        if (longPressRef.current.mode === 'selection') {
-          enableMessageSelection(messageId, { preserveMenu: true });
-          return;
-        }
-
         openMessageActions(messageId);
       }, LONG_PRESS_MS),
       triggered: false,
@@ -479,13 +500,6 @@ export const ConversationView = ({
           <div className="message-empty">Open a chat from the drawer or create a fresh tab to continue.</div>
         ) : null}
 
-        {busy ? (
-          <div className="run-row">
-            <Icon name="loader" size={14} spin />
-            <span>Agent running • {chat?.title ?? 'active session'}</span>
-          </div>
-        ) : null}
-
         {chat?.messages.filter((message) => message.role !== 'system').map((message, index, messages) => {
           const isLastAssistant = message.role === 'assistant' && index === messages.length - 1;
           const isEnteringUserMessage = message.role === 'user' && message.id.startsWith('optimistic-');
@@ -494,57 +508,24 @@ export const ConversationView = ({
           const isIntermediateMessage = message.role === 'assistant' && chat.activity.some((entry) => entry.id === message.id);
           const showInlineStack = message.role === 'assistant' && !isIntermediateMessage && stackEntries.length > 0;
           const inlineStackExpanded = expandedStackMessageId === message.id;
-          const topStackEntry = stackEntries[0] ?? null;
 
           return (
             <div key={message.id} className="message-block">
-              {showInlineStack && topStackEntry ? (
-                <div className="message-inline-stack">
-                  <button
-                    className={`message-stack__summary ${inlineStackExpanded ? 'message-stack__summary--expanded' : ''}`}
-                    type="button"
-                    onClick={() => setExpandedStackMessageId((current) => (current === message.id ? null : message.id))}
-                  >
-                    <div className="message-stack__summary-header">
-                      <span className="message-stack__title">Agent activity</span>
-                      <span className="message-stack__count">
-                        {inlineStackExpanded ? 'Hide stack' : `${stackEntries.length} saved`}
-                      </span>
-                    </div>
-                    <div className="message-stack__layers" aria-hidden="true">
-                      <span />
-                      <span />
-                    </div>
-                    <article className="message-sheet__detail-card message-sheet__detail-card--stack">
+              {showInlineStack && inlineStackExpanded ? (
+                <div className="message-inline-stack__items">
+                  {stackEntries.map((entry) => (
+                    <article key={entry.id} className="message-sheet__detail-card">
                       <div className="message-sheet__detail-header">
-                        <span className="message-sheet__detail-title">{topStackEntry.title}</span>
-                        <span className={`message-sheet__detail-status message-sheet__detail-status--${topStackEntry.status}`}>
-                          {topStackEntry.status.replace('-', ' ')}
+                        <span className="message-sheet__detail-title">{liveActivityHeadline(entry)}</span>
+                        <span className={`message-sheet__detail-status message-sheet__detail-status--${entry.status}`}>
+                          {entry.status.replace('-', ' ')}
                         </span>
                       </div>
-                      <div className="message-sheet__detail-kind">{topStackEntry.kind.replace('-', ' ')}</div>
-                      <p className="message-sheet__detail-summary">{topStackEntry.summary}</p>
-                      {topStackEntry.detail ? <pre className="message-sheet__detail-body">{topStackEntry.detail}</pre> : null}
+                      <div className="message-sheet__detail-kind">{entry.kind.replace('-', ' ')}</div>
+                      <p className="message-sheet__detail-summary">{entry.summary}</p>
+                      {entry.detail ? <pre className="message-sheet__detail-body">{entry.detail}</pre> : null}
                     </article>
-                  </button>
-
-                  {inlineStackExpanded ? (
-                    <div className="message-inline-stack__items">
-                      {stackEntries.slice(1).map((entry) => (
-                        <article key={entry.id} className="message-sheet__detail-card">
-                          <div className="message-sheet__detail-header">
-                            <span className="message-sheet__detail-title">{entry.title}</span>
-                            <span className={`message-sheet__detail-status message-sheet__detail-status--${entry.status}`}>
-                              {entry.status.replace('-', ' ')}
-                            </span>
-                          </div>
-                          <div className="message-sheet__detail-kind">{entry.kind.replace('-', ' ')}</div>
-                          <p className="message-sheet__detail-summary">{entry.summary}</p>
-                          {entry.detail ? <pre className="message-sheet__detail-body">{entry.detail}</pre> : null}
-                        </article>
-                      ))}
-                    </div>
-                  ) : null}
+                  ))}
                 </div>
               ) : null}
 
@@ -557,11 +538,16 @@ export const ConversationView = ({
                   isEnteringUserMessage ? 'message-card--enter' : ''
                 } ${selectionMessageId === message.id ? 'message-card--selecting' : ''} ${
                   spotlightMessageId === message.id ? 'message-card--spotlight' : ''
-                } ${isIntermediateMessage ? 'message-card--progress' : ''}`}
+                } ${isIntermediateMessage ? 'message-card--progress' : ''} ${
+                  showInlineStack && !inlineStackExpanded ? 'message-card--with-stack' : ''
+                }`}
                 onContextMenu={(event) => {
-                  const suppressed = suppressContextMenuRef.current;
-                  if (suppressed && suppressed.messageId === message.id && suppressed.expiresAt > Date.now()) {
-                    event.preventDefault();
+                  const target = event.target;
+                  if (
+                    selectionMessageId === message.id &&
+                    target instanceof Element &&
+                    target.closest('.message-card__body')
+                  ) {
                     return;
                   }
 
@@ -583,24 +569,37 @@ export const ConversationView = ({
                 }}
                 aria-label={`${messageLabel(message.role)} message`}
               >
-                <p
-                  ref={(node) => {
-                    messageBodyNodesRef.current[message.id] = node;
-                  }}
-                  className={`message-card__body ${selectionMessageId === message.id ? 'message-card__body--selectable' : ''}`}
+                {showInlineStack ? (
+                  <button
+                    className="message-card__stack-toggle"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setExpandedStackMessageId((current) => (current === message.id ? null : message.id));
+                    }}
+                  >
+                    {inlineStackExpanded ? 'Hide stack' : 'Expand stack'}
+                  </button>
+                ) : null}
+                <div
+                  className={`message-card__body message-markdown ${
+                    selectionMessageId === message.id ? 'message-card__body--selectable' : ''
+                  }`}
                 >
-                  <HighlightedText
-                    activeHitId={activeSearchHitId}
-                    hitIdPrefix={`search-hit-${message.id}`}
-                    query={searchQuery}
-                    text={message.content}
-                  />
-                </p>
+                  {renderMessageMarkdown(message.content, {
+                    activeHitId: activeSearchHitId,
+                    hitIdPrefix: `search-hit-${message.id}`,
+                    query: searchQuery,
+                  })}
+                </div>
                 {isLastAssistant ? <span className="message-card__meta">{formatMeta(chat.updatedAt)}</span> : null}
               </div>
             </div>
           );
         })}
+
+        {busy ? <LiveActivityStack busy={busy} entries={liveActivity} searchQuery={searchQuery} /> : null}
+
         <div ref={bottomRef} />
       </div>
 
@@ -613,10 +612,13 @@ export const ConversationView = ({
             onClick={() => {
               setMessageMenu(null);
               setDetailsMessageId(null);
+              setSelectionMessageId(null);
+              clearNativeSelection();
             }}
           />
 
           <div
+            ref={messageMenuRef}
             className="message-overlay__menu"
             style={{
               left: `${messageMenu.menuLeft}px`,
@@ -630,7 +632,11 @@ export const ConversationView = ({
                 void copyTextToClipboard(selectedMessage.content)
                   .then(() => setNotice('Message copied'))
                   .catch(() => setNotice('Copy failed'))
-                  .finally(() => setMessageMenu(null));
+                  .finally(() => {
+                    setMessageMenu(null);
+                    setSelectionMessageId(null);
+                    clearNativeSelection();
+                  });
               }}
             >
               Copy
@@ -643,6 +649,8 @@ export const ConversationView = ({
                 setDetailsMessageId(selectedMessage.id);
                 setDetailsStackExpanded(false);
                 setMessageMenu(null);
+                setSelectionMessageId(null);
+                clearNativeSelection();
               }}
             >
               Activity

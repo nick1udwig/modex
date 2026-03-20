@@ -1,3 +1,4 @@
+import { messageMarkdownToPlainText } from './messageMarkdown';
 import type { ChatSummary, ChatThread } from './types';
 
 export interface MatchRange {
@@ -64,7 +65,7 @@ export const searchThreadMessages = (thread: ChatThread | null, query: string): 
   thread.messages
     .filter((message) => message.role !== 'system')
     .forEach((message) => {
-      const ranges = findMatchRanges(message.content, query);
+      const ranges = findMatchRanges(messageMarkdownToPlainText(message.content), query);
       if (ranges.length === 0) {
         return;
       }

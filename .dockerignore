@@ -1,0 +1,16 @@
+.git
+dist
+node_modules
+npm-debug.log*
+
+backend/sidecar/.env
+backend/sidecar/.env.local
+
+260310-modex-design.pen
+260318-modex-design.pen
+IMG_*.jpg
+signal-*.jpeg
+
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

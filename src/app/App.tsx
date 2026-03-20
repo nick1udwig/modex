@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { searchSummaries, searchThreadMessages } from './search';
-import type { ChatRuntimeSettings, ModelOption, PendingAttachment, ReasoningEffort } from './types';
+import { resolveSlashCommandState } from './slashCommands';
+import type { ApprovalPolicy, ChatRuntimeSettings, ModelOption, PendingAttachment, ReasoningEffort } from './types';
 import { useRealtimeTranscription } from './useRealtimeTranscription';
 import { Composer } from '../components/Composer';
 import { ConversationView } from '../components/ConversationView';
@@ -62,6 +63,7 @@ const DRAWER_EDGE_WIDTH = 28;
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const CLOSED_SETTINGS_SHEET: SettingsSheetState = { open: false };
+const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = 'on-request';
 const DEFAULT_REASONING_EFFORTS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 const FALLBACK_MODEL_OPTIONS: ModelOption[] = [
   {
@@ -75,6 +77,7 @@ const FALLBACK_MODEL_OPTIONS: ModelOption[] = [
 
 const cloneSettings = (settings: ChatRuntimeSettings): ChatRuntimeSettings => ({
   accessMode: settings.accessMode,
+  approvalPolicy: settings.approvalPolicy,
   model: settings.model,
   reasoningEffort: settings.reasoningEffort,
   roots: [...settings.roots],
@@ -203,6 +206,18 @@ export const App = () => {
   const selectedModel = modelOptions.find((model) => model.id === selectedModelId) ?? defaultModel;
   const selectedReasoningEffort =
     modex.activeChatSettings?.reasoningEffort ?? selectedModel.defaultReasoningEffort ?? defaultModel.defaultReasoningEffort;
+  const selectedApprovalPolicy = modex.activeChatSettings?.approvalPolicy ?? DEFAULT_APPROVAL_POLICY;
+  const slashCommandState = useMemo(
+    () =>
+      resolveSlashCommandState({
+        approvalPolicy: selectedApprovalPolicy,
+        draft: liveDraft,
+        modelOptions,
+        reasoningEfforts: selectedModel.supportedReasoningEfforts,
+        selectedModelId,
+      }),
+    [liveDraft, modelOptions, selectedApprovalPolicy, selectedModel.supportedReasoningEfforts, selectedModelId],
+  );
   const completedTranscription = transcription.completedResult;
 
   useEffect(() => {
@@ -709,6 +724,7 @@ export const App = () => {
     if (modex.activeChat?.cwd) {
       return {
         accessMode: 'workspace-write',
+        approvalPolicy: selectedApprovalPolicy,
         model: defaultModel.id,
         reasoningEffort: selectedReasoningEffort,
         roots: [modex.activeChat.cwd],
@@ -717,6 +733,7 @@ export const App = () => {
 
     return {
       accessMode: 'workspace-write',
+      approvalPolicy: selectedApprovalPolicy,
       model: defaultModel.id,
       reasoningEffort: selectedReasoningEffort,
       roots: [],
@@ -754,6 +771,7 @@ export const App = () => {
 
     modex.setChatSettings(modex.activeChatId, {
       accessMode,
+      approvalPolicy: modex.activeChatSettings?.approvalPolicy ?? DEFAULT_APPROVAL_POLICY,
       model: modex.activeChatSettings?.model ?? defaultModel.id,
       reasoningEffort: modex.activeChatSettings?.reasoningEffort ?? selectedReasoningEffort,
       roots: modex.activeChatSettings?.roots ?? (modex.activeChat?.cwd ? [modex.activeChat.cwd] : []),
@@ -768,6 +786,7 @@ export const App = () => {
     const nextModel = modelOptions.find((model) => model.id === modelId) ?? defaultModel;
     modex.setChatSettings(modex.activeChatId, {
       accessMode: modex.activeChatSettings?.accessMode ?? 'workspace-write',
+      approvalPolicy: modex.activeChatSettings?.approvalPolicy ?? DEFAULT_APPROVAL_POLICY,
       model: nextModel.id,
       reasoningEffort: nextModel.defaultReasoningEffort ?? selectedReasoningEffort,
       roots: modex.activeChatSettings?.roots ?? (modex.activeChat?.cwd ? [modex.activeChat.cwd] : []),
@@ -781,10 +800,55 @@ export const App = () => {
 
     modex.setChatSettings(modex.activeChatId, {
       accessMode: modex.activeChatSettings?.accessMode ?? 'workspace-write',
+      approvalPolicy: modex.activeChatSettings?.approvalPolicy ?? DEFAULT_APPROVAL_POLICY,
       model: modex.activeChatSettings?.model ?? defaultModel.id,
       reasoningEffort,
       roots: modex.activeChatSettings?.roots ?? (modex.activeChat?.cwd ? [modex.activeChat.cwd] : []),
     });
+  };
+
+  const applyApprovalPolicy = (approvalPolicy: ApprovalPolicy) => {
+    if (!modex.activeChatId) {
+      return;
+    }
+
+    modex.setChatSettings(modex.activeChatId, {
+      accessMode: modex.activeChatSettings?.accessMode ?? 'workspace-write',
+      approvalPolicy,
+      model: modex.activeChatSettings?.model ?? defaultModel.id,
+      reasoningEffort: modex.activeChatSettings?.reasoningEffort ?? selectedReasoningEffort,
+      roots: modex.activeChatSettings?.roots ?? (modex.activeChat?.cwd ? [modex.activeChat.cwd] : []),
+    });
+  };
+
+  const executeSlashCommand = async (suggestion: NonNullable<typeof slashCommandState>['suggestions'][number]) => {
+    commitTranscription(false);
+    switch (suggestion.action.type) {
+      case 'new':
+        modex.setDraft('');
+        closeDrawer();
+        await modex.createChat(seedSettings());
+        return;
+
+      case 'expand':
+        modex.setDraft(`/${suggestion.action.command} `);
+        return;
+
+      case 'set-model':
+        applyModelSelection(suggestion.action.modelId);
+        modex.setDraft('');
+        return;
+
+      case 'set-reasoning':
+        applyReasoningEffort(suggestion.action.reasoningEffort);
+        modex.setDraft('');
+        return;
+
+      case 'set-approval-policy':
+        applyApprovalPolicy(suggestion.action.approvalPolicy);
+        modex.setDraft('');
+        return;
+    }
   };
 
   const handleAttachmentSelection = async (files: FileList | File[] | null) => {
@@ -1105,6 +1169,7 @@ export const App = () => {
                     activeSearchHitId={activeSearchHitId}
                     busy={Boolean(isBusy)}
                     chat={modex.activeChat}
+                    liveActivity={modex.activeLiveActivity}
                     loading={modex.loading}
                     modelOptions={modelOptions}
                     onSelectModel={applyModelSelection}
@@ -1173,6 +1238,7 @@ export const App = () => {
             onSearchPrevious={() => stepSearch(-1)}
             onSearchQueryChange={setSearchQuery}
             onSend={() => void modex.sendMessage()}
+            onExecuteSlashCommand={(suggestion) => void executeSlashCommand(suggestion)}
             onStopRun={() => void modex.interruptTurn()}
             onSubmitUserInput={(answers) => void modex.submitUserInput(answers)}
             onToggleVoiceInput={toggleVoiceInput}
@@ -1184,6 +1250,7 @@ export const App = () => {
             searchActive={searchActive}
             searchHitLabel={searchHitLabel}
             searchQuery={liveSearchQuery}
+            slashCommands={slashCommandState?.suggestions ?? []}
           />
         </div>
 
