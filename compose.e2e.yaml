@@ -1,0 +1,28 @@
+services:
+  modex-e2e:
+    build:
+      context: .
+      dockerfile: docker/e2e/Dockerfile
+    image: modex-e2e:local
+    environment:
+      MODEX_APP_SERVER_EXTRA_ARGS: ${MODEX_APP_SERVER_EXTRA_ARGS:-}
+      MODEX_APP_SERVER_LISTEN: ws://0.0.0.0:4222
+      MODEX_FS_ROOTS: ${MODEX_FS_ROOTS:-/workspace/modex}
+      MODEX_PUBLIC_ORIGIN: ${MODEX_PUBLIC_ORIGIN:-http://localhost:8080}
+      MODEX_SIDECAR_ALLOWED_ORIGINS: ${MODEX_SIDECAR_ALLOWED_ORIGINS:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:8080/ >/dev/null && curl -fsS http://127.0.0.1:8080/app-server/healthz >/dev/null && curl -fsS http://127.0.0.1:8080/sidecar/healthz | grep -q '\"ok\":true'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    ports:
+      - "${MODEX_E2E_PORT:-8080}:8080"
+    restart: unless-stopped
+    volumes:
+      - ${HOME}/.codex:/host-codex:ro

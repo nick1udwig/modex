@@ -1,0 +1,28 @@
+{
+  admin off
+  auto_https off
+}
+
+:8080 {
+  encode zstd gzip
+
+  route {
+    @appserver path /app-server /app-server/*
+    handle @appserver {
+      uri strip_prefix /app-server
+      reverse_proxy 127.0.0.1:4222
+    }
+
+    @sidecar path /sidecar /sidecar/*
+    handle @sidecar {
+      uri strip_prefix /sidecar
+      reverse_proxy 127.0.0.1:4230
+    }
+
+    handle {
+      root * /srv/modex
+      try_files {path} /index.html
+      file_server
+    }
+  }
+}
