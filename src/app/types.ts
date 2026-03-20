@@ -1,5 +1,6 @@
 export type ChatStatus = 'idle' | 'running';
 export type AccessMode = 'read-only' | 'workspace-write';
+export type ApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never';
 export type JsonRpcId = number | string;
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
@@ -49,6 +50,7 @@ export interface ChatTab {
 
 export interface ChatRuntimeSettings {
   accessMode: AccessMode;
+  approvalPolicy: ApprovalPolicy | null;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
   roots: string[];

@@ -55,6 +55,7 @@ test('sanitizeWorkspaceSnapshot keeps valid runtime settings per chat', () => {
       chatSettingsByChatId: {
         'chat-a': {
           accessMode: 'workspace-write',
+          approvalPolicy: 'never',
           model: 'gpt-5.4',
           reasoningEffort: 'xhigh',
           roots: ['/workspace/a', '/workspace/shared', '/workspace/a'],
@@ -72,6 +73,7 @@ test('sanitizeWorkspaceSnapshot keeps valid runtime settings per chat', () => {
   assert.deepEqual(snapshot.chatSettingsByChatId, {
     'chat-a': {
       accessMode: 'workspace-write',
+      approvalPolicy: 'never',
       model: 'gpt-5.4',
       reasoningEffort: 'xhigh',
       roots: ['/workspace/a', '/workspace/shared'],

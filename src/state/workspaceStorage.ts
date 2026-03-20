@@ -325,6 +325,14 @@ export const sanitizeWorkspaceSnapshot = (
         'accessMode' in value && (value.accessMode === 'read-only' || value.accessMode === 'workspace-write')
           ? value.accessMode
           : null;
+      const approvalPolicy =
+        'approvalPolicy' in value &&
+        (value.approvalPolicy === 'untrusted' ||
+          value.approvalPolicy === 'on-failure' ||
+          value.approvalPolicy === 'on-request' ||
+          value.approvalPolicy === 'never')
+          ? value.approvalPolicy
+          : null;
       const model = 'model' in value && typeof value.model === 'string' && value.model.trim().length > 0 ? value.model : null;
       const reasoningEffort =
         'reasoningEffort' in value &&
@@ -346,6 +354,7 @@ export const sanitizeWorkspaceSnapshot = (
           chatId,
           {
             accessMode,
+            approvalPolicy,
             model,
             reasoningEffort,
             roots: sanitizeRoots('roots' in value ? value.roots : undefined),

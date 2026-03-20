@@ -1356,6 +1356,50 @@ textarea:disabled {
   min-height: 48px;
 }
 
+.composer-slash {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.composer-slash__item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 132, 0, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  text-align: left;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+}
+
+.composer-slash__item--active {
+  border-color: rgba(255, 132, 0, 0.42);
+  background: rgba(255, 132, 0, 0.1);
+}
+
+.composer-slash__command {
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  grid-column: 1;
+  grid-row: 1 / span 2;
+}
+
+.composer-slash__label {
+  font-family: var(--font-display);
+  font-size: 12px;
+  grid-column: 2;
+}
+
+.composer-slash__description {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  grid-column: 2;
+}
+
 .footer-icon {
   width: 36px;
   height: 36px;

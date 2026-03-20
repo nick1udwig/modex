@@ -57,3 +57,10 @@ docker compose -f compose.e2e.yaml restart modex-e2e
 - App-server file edits land directly in the mounted host repo.
 - The compose file only mounts `~/.codex` by default. If you also want SSH or git config inside the container for agent tasks, add extra bind mounts in `compose.e2e.yaml`.
 - Those extra container permissions are intentional for the harness, because otherwise Codex sandboxed commands fail with bubblewrap or `unshare` errors even for basic read-only inspection.
+
+## Manual smoke flows
+
+- Read-only flow: open a tab rooted at `/workspace/modex`, send a repo question, and confirm streamed activity appears in the chat before collapsing back to the final answer.
+- Slash commands: type `/` in the composer and confirm the inline menu shows `/new`, `/model`, `/reasoning`, and `/approvals`.
+- Slash command execution: use `/new` to open a fresh tab, then run `/model <id>`, `/reasoning <effort>`, or `/approvals <policy>` and confirm the draft clears and the active tab settings change.
+- Backend truth check: after a slash-command change plus a send, inspect `/root/.codex/sessions/YYYY/MM/DD/*.jsonl` in the container and confirm the `turn_context` matches the selected model, effort, approval policy, and sandbox mode.

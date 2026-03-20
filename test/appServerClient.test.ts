@@ -780,6 +780,7 @@ test('sendMessage waits for completed turn output to materialize before returnin
     content: 'Follow up',
     settings: {
       accessMode: 'workspace-write',
+      approvalPolicy: null,
       model: null,
       reasoningEffort: null,
       roots: ['/workspace/project'],

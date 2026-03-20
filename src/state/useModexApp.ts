@@ -89,6 +89,7 @@ const inferSettings = (
   existing?: ChatRuntimeSettings,
 ): ChatRuntimeSettings => ({
   accessMode: existing?.accessMode ?? DEFAULT_ACCESS_MODE,
+  approvalPolicy: existing?.approvalPolicy ?? null,
   model: existing?.model ?? null,
   reasoningEffort: existing?.reasoningEffort ?? null,
   roots: existing?.roots.length ? existing.roots : thread.cwd ? [thread.cwd] : [],
@@ -664,6 +665,7 @@ export const useModexApp = (client: RemoteAppClient) => {
         ...current.chatSettingsByChatId,
         [chatId]: {
           accessMode: settings.accessMode,
+          approvalPolicy: settings.approvalPolicy,
           model: settings.model,
           reasoningEffort: settings.reasoningEffort,
           roots: settings.roots,

@@ -3,6 +3,7 @@ import type {
   ActivityEntry,
   ActivityStatus,
   ApprovalDecision,
+  ApprovalPolicy,
   ApprovalRequest,
   ChatRuntimeSettings,
   ChatStatus,
@@ -39,7 +40,7 @@ const TURN_MATERIALIZATION_POLL_MS = 350;
 const TURN_MATERIALIZATION_TIMEOUT_MS = 15_000;
 
 interface AppServerConfig {
-  approvalPolicy?: 'untrusted' | 'on-failure' | 'on-request' | 'never';
+  approvalPolicy?: ApprovalPolicy;
   cwd?: string;
   model?: string;
   modelProvider?: string;
@@ -484,6 +485,9 @@ const normalizeAccessMode = (settings: ChatRuntimeSettings | undefined, config: 
   return 'workspace-write';
 };
 
+const normalizeApprovalPolicy = (settings: ChatRuntimeSettings | undefined, config: AppServerConfig) =>
+  settings?.approvalPolicy ?? config.approvalPolicy;
+
 const coarseSandboxMode = (
   accessMode: AccessMode,
 ): Exclude<AppServerConfig['sandbox'], 'danger-full-access' | undefined> =>
@@ -527,7 +531,7 @@ const buildThreadStartParams = (config: AppServerConfig, settings: ChatRuntimeSe
   const accessMode = normalizeAccessMode(settings, config);
 
   return omitUndefined({
-    approvalPolicy: config.approvalPolicy,
+    approvalPolicy: normalizeApprovalPolicy(settings, config),
     cwd: primaryRoot(settings, config.cwd),
     experimentalRawEvents: false,
     model: settings?.model ?? config.model,
@@ -545,7 +549,7 @@ const buildThreadResumeParams = (
   const accessMode = normalizeAccessMode(settings, config);
 
   return omitUndefined({
-    approvalPolicy: config.approvalPolicy,
+    approvalPolicy: normalizeApprovalPolicy(settings, config),
     cwd: primaryRoot(settings, config.cwd),
     model: settings?.model ?? config.model,
     modelProvider: config.modelProvider,
@@ -618,7 +622,7 @@ const buildTurnStartParams = (
   payload: SendMessagePayload,
 ) =>
   omitUndefined({
-    approvalPolicy: config.approvalPolicy,
+    approvalPolicy: normalizeApprovalPolicy(payload.settings, config),
     cwd: primaryRoot(payload.settings, config.cwd),
     effort: payload.settings?.reasoningEffort ?? undefined,
     input: buildTurnInputs(payload.content, payload.attachments ?? []),
