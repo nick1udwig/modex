@@ -1543,6 +1543,13 @@ export class AppServerClient implements RemoteAppClient {
     this.wasBackgrounded = false;
     this.handleForegroundResume(shouldRestartConnection);
   };
+  private readonly handlePageShow = (event: PageTransitionEvent) => {
+    if (!event.persisted) {
+      return;
+    }
+
+    this.handleForegroundResume(true);
+  };
   private readonly handleReconnectSignal = () => {
     this.handleForegroundResume(true);
   };
@@ -1884,7 +1891,7 @@ export class AppServerClient implements RemoteAppClient {
     }
 
     window.addEventListener('online', this.handleReconnectSignal);
-    window.addEventListener('pageshow', this.handleReconnectSignal);
+    window.addEventListener('pageshow', this.handlePageShow);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     this.reconnectSignalsBound = true;
   }
@@ -1895,7 +1902,7 @@ export class AppServerClient implements RemoteAppClient {
     }
 
     window.removeEventListener('online', this.handleReconnectSignal);
-    window.removeEventListener('pageshow', this.handleReconnectSignal);
+    window.removeEventListener('pageshow', this.handlePageShow);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     this.reconnectSignalsBound = false;
   }

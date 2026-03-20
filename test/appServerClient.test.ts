@@ -688,6 +688,22 @@ test('foreground resume restarts an existing connection after the app was backgr
   assert.equal(nudged, 0);
 });
 
+test('pageshow ignores the initial page load but reconnects after a bfcache restore', () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  let restarted = 0;
+
+  (client as any).handleForegroundResume = (forceRestart: boolean) => {
+    if (forceRestart) {
+      restarted += 1;
+    }
+  };
+
+  (client as any).handlePageShow({ persisted: false });
+  (client as any).handlePageShow({ persisted: true });
+
+  assert.equal(restarted, 1);
+});
+
 test('sendMessage waits for completed turn output to materialize before returning the thread', async () => {
   const client = new AppServerClient({ url: 'ws://localhost:4222' });
   let readCount = 0;
