@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
 import { liveActivityHeadline } from '../app/liveActivityPresentation';
 import { renderMessageMarkdown } from '../app/messageMarkdown';
-import { positionMessageMenu } from '../app/messageMenuPosition';
+import { messageMenuViewport, positionMessageMenu } from '../app/messageMenuPosition';
 import type { ActivityEntry, ChatThread, ModelOption, ReasoningEffort } from '../app/types';
 import { Icon } from './Icon';
 import { LiveActivityStack } from './LiveActivityStack';
@@ -98,6 +98,8 @@ const clearNativeSelection = () => {
 
   selection.removeAllRanges();
 };
+
+const currentMenuViewport = () => messageMenuViewport(window);
 
 export const ConversationView = ({
   activeSearchHitId = null,
@@ -286,12 +288,17 @@ export const ConversationView = ({
     };
 
     const listNode = messageListRef.current;
+    const visualViewport = window.visualViewport;
     listNode?.addEventListener('scroll', handleReposition);
     window.addEventListener('resize', handleReposition);
+    visualViewport?.addEventListener('resize', handleReposition);
+    visualViewport?.addEventListener('scroll', handleReposition);
 
     return () => {
       listNode?.removeEventListener('scroll', handleReposition);
       window.removeEventListener('resize', handleReposition);
+      visualViewport?.removeEventListener('resize', handleReposition);
+      visualViewport?.removeEventListener('scroll', handleReposition);
     };
   }, [messageMenu]);
 
@@ -306,10 +313,7 @@ export const ConversationView = ({
         height: messageMenuRef.current.offsetHeight,
         width: messageMenuRef.current.offsetWidth,
       },
-      {
-        height: window.innerHeight,
-        width: window.innerWidth,
-      },
+      currentMenuViewport(),
     );
 
     if (nextPosition.left === messageMenu.menuLeft && nextPosition.top === messageMenu.menuTop) {
@@ -355,10 +359,7 @@ export const ConversationView = ({
     const position = positionMessageMenu(
       anchorRect,
       MESSAGE_MENU_ESTIMATE,
-      {
-        height: window.innerHeight,
-        width: window.innerWidth,
-      },
+      currentMenuViewport(),
     );
     setMessageMenu({
       anchorRect,

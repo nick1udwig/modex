@@ -12,7 +12,20 @@ interface SizeLike {
 
 interface ViewportLike {
   height: number;
+  offsetLeft?: number;
+  offsetTop?: number;
   width: number;
+}
+
+interface WindowLike {
+  innerHeight: number;
+  innerWidth: number;
+  visualViewport?: {
+    height: number;
+    offsetLeft?: number;
+    offsetTop?: number;
+    width: number;
+  } | null;
 }
 
 export interface MenuPosition {
@@ -23,21 +36,34 @@ export interface MenuPosition {
 const EDGE_MARGIN_PX = 16;
 const GAP_PX = 10;
 
+export const messageMenuViewport = (windowLike: WindowLike): ViewportLike => ({
+  height: windowLike.visualViewport?.height ?? windowLike.innerHeight,
+  offsetLeft: windowLike.visualViewport?.offsetLeft ?? 0,
+  offsetTop: windowLike.visualViewport?.offsetTop ?? 0,
+  width: windowLike.visualViewport?.width ?? windowLike.innerWidth,
+});
+
 export const positionMessageMenu = (
   anchorRect: RectLike,
   menuSize: SizeLike,
   viewport: ViewportLike,
 ): MenuPosition => {
-  const maxLeft = Math.max(EDGE_MARGIN_PX, viewport.width - menuSize.width - EDGE_MARGIN_PX);
-  const left = Math.min(maxLeft, Math.max(EDGE_MARGIN_PX, anchorRect.left));
+  const viewportLeft = (viewport.offsetLeft ?? 0) + EDGE_MARGIN_PX;
+  const viewportRight = (viewport.offsetLeft ?? 0) + viewport.width - EDGE_MARGIN_PX;
+  const viewportTop = (viewport.offsetTop ?? 0) + EDGE_MARGIN_PX;
+  const viewportBottom = (viewport.offsetTop ?? 0) + viewport.height - EDGE_MARGIN_PX;
+  const maxLeft = Math.max(viewportLeft, viewportRight - menuSize.width);
+  const left = Math.min(maxLeft, Math.max(viewportLeft, anchorRect.left));
 
-  const spaceBelow = viewport.height - anchorRect.bottom - EDGE_MARGIN_PX;
-  const spaceAbove = anchorRect.top - EDGE_MARGIN_PX;
+  const anchorTop = Math.min(viewportBottom, Math.max(viewportTop, anchorRect.top));
+  const anchorBottom = Math.min(viewportBottom, Math.max(viewportTop, anchorRect.bottom));
+  const spaceBelow = viewportBottom - anchorBottom;
+  const spaceAbove = anchorTop - viewportTop;
   const preferAbove = spaceBelow < menuSize.height + GAP_PX && spaceAbove > spaceBelow;
 
-  const naturalTop = preferAbove ? anchorRect.top - menuSize.height - GAP_PX : anchorRect.bottom + GAP_PX;
-  const maxTop = Math.max(EDGE_MARGIN_PX, viewport.height - menuSize.height - EDGE_MARGIN_PX);
-  const top = Math.min(maxTop, Math.max(EDGE_MARGIN_PX, naturalTop));
+  const naturalTop = preferAbove ? anchorTop - menuSize.height - GAP_PX : anchorBottom + GAP_PX;
+  const maxTop = Math.max(viewportTop, viewportBottom - menuSize.height);
+  const top = Math.min(maxTop, Math.max(viewportTop, naturalTop));
 
   return {
     left,

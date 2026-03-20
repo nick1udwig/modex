@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { positionMessageMenu } from '../src/app/messageMenuPosition.ts';
+import { messageMenuViewport, positionMessageMenu } from '../src/app/messageMenuPosition.ts';
 
 test('positionMessageMenu keeps the menu below the message when there is room', () => {
   assert.deepEqual(
@@ -73,6 +73,54 @@ test('positionMessageMenu clamps horizontally inside the viewport', () => {
     {
       left: 210,
       top: 410,
+    },
+  );
+});
+
+test('messageMenuViewport prefers the visual viewport on mobile browsers', () => {
+  assert.deepEqual(
+    messageMenuViewport({
+      innerHeight: 844,
+      innerWidth: 390,
+      visualViewport: {
+        height: 716,
+        offsetLeft: 0,
+        offsetTop: 0,
+        width: 390,
+      },
+    }),
+    {
+      height: 716,
+      offsetLeft: 0,
+      offsetTop: 0,
+      width: 390,
+    },
+  );
+});
+
+test('positionMessageMenu stays inside a smaller visible mobile viewport near the bottom edge', () => {
+  assert.deepEqual(
+    positionMessageMenu(
+      {
+        bottom: 700,
+        left: 172,
+        right: 374,
+        top: 636,
+      },
+      {
+        height: 110,
+        width: 164,
+      },
+      {
+        height: 716,
+        offsetLeft: 0,
+        offsetTop: 0,
+        width: 390,
+      },
+    ),
+    {
+      left: 172,
+      top: 516,
     },
   );
 });
