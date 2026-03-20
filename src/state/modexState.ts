@@ -19,6 +19,7 @@ const ACTIVITY_STATUS_PRIORITY: Record<ActivityStatus, number> = {
 };
 
 const compactActivitySummary = (text: string) => text.replace(/\s+/g, ' ').trim();
+const isActiveChatStatus = (status: ChatStatus) => status !== 'idle';
 
 export const mergeBootstrapThread = (hydrated: ChatThread, current?: ChatThread): ChatThread => {
   if (!current) {
@@ -60,7 +61,7 @@ const mergeActivityEntry = (current: ActivityEntry, incoming: ActivityEntry): Ac
 };
 
 export const deriveLiveActivity = (thread: Pick<ChatThread, 'activity' | 'status'>) =>
-  thread.status === 'running' ? thread.activity.filter((entry) => entry.status === 'in-progress') : [];
+  isActiveChatStatus(thread.status) ? thread.activity.filter((entry) => entry.status === 'in-progress') : [];
 
 export const downgradeMissingThread = (thread: ChatThread): ChatThread => ({
   ...thread,
@@ -68,7 +69,7 @@ export const downgradeMissingThread = (thread: ChatThread): ChatThread => ({
 });
 
 export const sanitizeBootstrapThread = (thread: ChatThread): ChatThread => {
-  if (thread.status !== 'running') {
+  if (!isActiveChatStatus(thread.status)) {
     return thread;
   }
 
@@ -83,7 +84,7 @@ export const shouldHoldIdleStatusUntilThreadSync = (
   thread: Pick<ChatThread, 'messages' | 'status'> | undefined,
   liveActivity: ActivityEntry[] | undefined,
   nextStatus: ChatStatus,
-) => nextStatus === 'idle' && Boolean(thread && thread.status === 'running' && (liveActivity?.length ?? 0) > 0);
+) => nextStatus === 'idle' && Boolean(thread && isActiveChatStatus(thread.status) && (liveActivity?.length ?? 0) > 0);
 
 export const upsertLiveActivity = (entries: ActivityEntry[], incoming: ActivityEntry) => {
   const index = entries.findIndex((entry) => entry.id === incoming.id);

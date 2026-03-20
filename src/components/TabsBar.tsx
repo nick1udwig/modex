@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
+import { chatStatusLabel, isChatActiveStatus } from '../app/chatStatus';
 import type { ChatSummary, ChatTab } from '../app/types';
 import { HighlightedText } from './HighlightedText';
 import { Icon } from './Icon';
@@ -129,7 +130,7 @@ const TabCard = ({ active, chat, masked, onActivate, onClose, registerNode, sear
   return (
     <button
       ref={registerNode}
-      className={`tab-card ${tab.status === 'running' ? 'tab-card--running' : ''} ${
+      className={`tab-card ${isChatActiveStatus(tab.status) ? 'tab-card--running' : ''} ${
         active ? 'tab-card--active' : ''
       } ${masked ? 'tab-card--masked' : ''} ${searchSelected ? 'tab-card--search' : ''}`}
       type="button"
@@ -156,7 +157,7 @@ const TabCard = ({ active, chat, masked, onActivate, onClose, registerNode, sear
         <span className="tab-card__title">
           <HighlightedText query={searchQuery} text={chat?.title ?? 'Untitled'} />
         </span>
-        {tab.status === 'running' ? (
+        {isChatActiveStatus(tab.status) ? (
           <Icon name="loader" size={14} spin className="tab-card__icon tab-card__icon--running" />
         ) : tab.hasUnreadCompletion ? (
           <span className="tab-card__dot tab-card__dot--unread" aria-hidden="true" />
@@ -172,11 +173,11 @@ const TabCard = ({ active, chat, masked, onActivate, onClose, registerNode, sear
         <HighlightedText query={searchQuery} text={snippet.secondary} />
       </p>
       <span
-        className={`tab-card__state ${tab.status === 'running' ? 'tab-card__state--running' : ''} ${
+        className={`tab-card__state ${isChatActiveStatus(tab.status) ? 'tab-card__state--running' : ''} ${
           tab.hasUnreadCompletion ? 'tab-card__state--unread' : ''
         }`}
       >
-        {tab.status === 'running' ? 'In progress' : tab.hasUnreadCompletion ? 'New reply' : 'Ready'}
+        {isChatActiveStatus(tab.status) ? chatStatusLabel(tab.status) : tab.hasUnreadCompletion ? 'New reply' : 'Ready'}
       </span>
     </button>
   );

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
+import { chatStatusMetaLabel, isChatActiveStatus } from '../app/chatStatus';
 import type { ChatSummary } from '../app/types';
 import { HighlightedText } from './HighlightedText';
 import { Icon } from './Icon';
@@ -108,7 +109,9 @@ export const Sidebar = ({
                   <span className="drawer-list__preview">
                     <HighlightedText query={searchQuery} text={chat.preview} />
                   </span>
-                  <span className="drawer-list__meta">{active ? relativeDay(chat.updatedAt) : chat.status === 'running' ? 'Running' : 'Ready'}</span>
+                  <span className="drawer-list__meta">
+                    {active ? relativeDay(chat.updatedAt) : isChatActiveStatus(chat.status) ? chatStatusMetaLabel(chat.status) : 'Ready'}
+                  </span>
                 </button>
               );
             })}

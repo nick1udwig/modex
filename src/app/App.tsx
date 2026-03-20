@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { searchSummaries, searchThreadMessages } from './search';
 import { resolveSlashCommandState } from './slashCommands';
-import type { ApprovalPolicy, ChatRuntimeSettings, ModelOption, PendingAttachment, ReasoningEffort } from './types';
+import { isChatActiveStatus } from './chatStatus';
+import type { ApprovalPolicy, ChatRuntimeSettings, ChatStatus, ModelOption, PendingAttachment, ReasoningEffort } from './types';
 import { useRealtimeTranscription } from './useRealtimeTranscription';
 import { Composer } from '../components/Composer';
 import { ConversationView } from '../components/ConversationView';
@@ -191,10 +192,10 @@ export const App = () => {
   const tabNodeMapRef = useRef(new Map<string, HTMLButtonElement>());
   const timeoutIdsRef = useRef<number[]>([]);
   const frameIdsRef = useRef<number[]>([]);
-  const previousTabSnapshotRef = useRef<Record<string, { hasUnreadCompletion: boolean; status: 'idle' | 'running' }>>({});
+  const previousTabSnapshotRef = useRef<Record<string, { hasUnreadCompletion: boolean; status: ChatStatus }>>({});
   const mountedRef = useRef(false);
   const activeTab = modex.openTabs.find((tab) => tab.chatId === modex.activeChatId);
-  const isBusy = activeTab?.status === 'running';
+  const isBusy = activeTab ? isChatActiveStatus(activeTab.status) : false;
   const transitionChatId = paneTransition?.chatId ?? null;
   const liveDraft =
     transcription.session?.target === 'draft' && transcription.session.chatId === modex.activeChatId
@@ -258,7 +259,9 @@ export const App = () => {
     );
 
     if (mountedRef.current) {
-      const completedTab = modex.openTabs.find((tab) => previousSnapshot[tab.chatId]?.status === 'running' && tab.status === 'idle');
+      const completedTab = modex.openTabs.find(
+        (tab) => previousSnapshot[tab.chatId] && isChatActiveStatus(previousSnapshot[tab.chatId].status) && tab.status === 'idle',
+      );
       if (completedTab) {
         playCompletionDing();
       }

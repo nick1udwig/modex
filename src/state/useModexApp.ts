@@ -11,6 +11,7 @@ import type {
   RemoteAppClient,
   RemoteThreadEvent,
 } from '../app/types';
+import { isChatActiveStatus } from '../app/chatStatus';
 import {
   appendMessageDelta,
   appendLiveActivityDelta,
@@ -183,7 +184,7 @@ const shouldMarkUnreadCompletion = (
 ) =>
   nextStatus === 'idle' &&
   current.activeChatId !== chatId &&
-  current.openTabs.some((tab) => tab.chatId === chatId && tab.status === 'running');
+  current.openTabs.some((tab) => tab.chatId === chatId && isChatActiveStatus(tab.status));
 
 const applyThread = (current: ModexState, thread: ChatThread): ModexState => {
   const shouldMarkUnread = shouldMarkUnreadCompletion(current, thread.id, thread.status);
@@ -192,7 +193,7 @@ const applyThread = (current: ModexState, thread: ChatThread): ModexState => {
     : setTabStatusIfOpen(current.openTabs, thread.id, thread.status);
   const backendLiveActivity = deriveLiveActivity(thread);
   const liveActivityByChatId =
-    thread.status === 'running'
+    isChatActiveStatus(thread.status)
       ? {
           ...current.liveActivityByChatId,
           [thread.id]: mergeLiveActivity(current.liveActivityByChatId[thread.id] ?? [], backendLiveActivity),
@@ -252,7 +253,7 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
         current.liveActivityByChatId[event.chatId],
         event.status,
       );
-      const effectiveStatus = holdIdleStatus ? 'running' : event.status;
+      const effectiveStatus = holdIdleStatus ? current.chatMap[event.chatId]?.status ?? 'running' : event.status;
       const chats = current.chats.map((chat) =>
         chat.id === event.chatId
           ? {
@@ -818,7 +819,7 @@ export const useModexApp = (client: RemoteAppClient) => {
 
     const chatId = state.activeChatId;
     const activeTab = state.openTabs.find((tab) => tab.chatId === chatId);
-    if (activeTab?.status === 'running') {
+    if (activeTab && isChatActiveStatus(activeTab.status)) {
       return;
     }
 

@@ -1,4 +1,4 @@
-export type ChatStatus = 'idle' | 'running';
+export type ChatStatus = 'idle' | 'running' | 'waiting-approval' | 'waiting-input';
 export type AccessMode = 'read-only' | 'workspace-write';
 export type ApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never';
 export type JsonRpcId = number | string;

@@ -848,7 +848,33 @@ const buildUserInputRequest = (
   turnId: params.turnId,
 });
 
-const normalizeStatus = (status: RawThreadStatus): ChatStatus => (status.type === 'active' ? 'running' : 'idle');
+const hasActiveFlag = (
+  status: RawThreadStatus,
+  flag: 'waitingOnApproval' | 'waitingOnUserInput',
+) => status.type === 'active' && (status.activeFlags ?? []).includes(flag);
+
+const waitingStatus = (status: RawThreadStatus): Extract<ChatStatus, 'waiting-approval' | 'waiting-input'> | null => {
+  if (hasActiveFlag(status, 'waitingOnApproval')) {
+    return 'waiting-approval';
+  }
+
+  if (hasActiveFlag(status, 'waitingOnUserInput')) {
+    return 'waiting-input';
+  }
+
+  return null;
+};
+
+const normalizeStatus = (status: RawThreadStatus): ChatStatus => {
+  const waiting = waitingStatus(status);
+  if (waiting) {
+    return waiting;
+  }
+
+  return status.type === 'active' ? 'running' : 'idle';
+};
+
+const shouldResumeWaitingThread = (status: RawThreadStatus) => waitingStatus(status) !== null;
 
 const latestTurn = (thread: Pick<RawThread, 'turns'>) => thread.turns[thread.turns.length - 1] ?? null;
 
@@ -894,14 +920,14 @@ export const collectThreadIdsToRefresh = (
 
   for (const summary of summaries) {
     summaryById.set(summary.id, summary);
-    if (summary.status === 'running') {
+    if (summary.status !== 'idle') {
       ids.add(summary.id);
     }
   }
 
   for (const thread of threads) {
     const summary = summaryById.get(thread.id);
-    if (thread.status === 'running' || hasTransientLocalMessages(thread)) {
+    if (thread.status !== 'idle' || hasTransientLocalMessages(thread)) {
       ids.add(thread.id);
       continue;
     }
@@ -1587,7 +1613,7 @@ export class AppServerClient implements RemoteAppClient {
 
   async getChat(chatId: string) {
     try {
-      const rawThread = await this.readRawThread(chatId);
+      const rawThread = await this.readRecoverableRawThread(chatId);
       const thread = this.storeMappedThread(rawThread);
       return thread;
     } catch (error) {
@@ -1694,7 +1720,7 @@ export class AppServerClient implements RemoteAppClient {
     let turnId: string | null = this.runningTurnIds.get(chatId) ?? null;
     if (!turnId) {
       try {
-        const rawThread = await this.readRawThread(chatId);
+        const rawThread = await this.readRecoverableRawThread(chatId);
         this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
         turnId = findActiveTurnId(rawThread);
         if (!turnId) {
@@ -1720,7 +1746,7 @@ export class AppServerClient implements RemoteAppClient {
       let refreshedTurnId: string | null;
 
       try {
-        const rawThread = await this.readRawThread(chatId);
+        const rawThread = await this.readRecoverableRawThread(chatId);
         this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
         refreshedTurnId = findActiveTurnId(rawThread);
       } catch {
@@ -2530,6 +2556,29 @@ export class AppServerClient implements RemoteAppClient {
     return response.thread;
   }
 
+  private async resumeRawThread(chatId: string) {
+    const connection = await this.ensureConnection();
+    const response = await connection.request<RawThreadResumeResponse>('thread/resume', {
+      threadId: chatId,
+    });
+
+    return response.thread;
+  }
+
+  private async readRecoverableRawThread(chatId: string) {
+    const rawThread = await this.readRawThread(chatId);
+    const alreadyAttachedToRequest = [...this.pendingServerRequests.values()].some((request) => request.chatId === chatId);
+    if (!shouldResumeWaitingThread(rawThread.status) || alreadyAttachedToRequest) {
+      return rawThread;
+    }
+
+    try {
+      return await this.resumeRawThread(chatId);
+    } catch {
+      return rawThread;
+    }
+  }
+
   private clearPendingRequestsForChat(chatId: string) {
     let cleared = false;
 
@@ -2626,7 +2675,7 @@ export class AppServerClient implements RemoteAppClient {
     this.refreshingThreadIds.add(threadId);
 
     try {
-      const rawThread = await this.readRawThread(threadId);
+      const rawThread = await this.readRecoverableRawThread(threadId);
       this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
     } catch (error) {
       if (isAppServerThreadNotFoundError(error)) {
@@ -2725,7 +2774,7 @@ export class AppServerClient implements RemoteAppClient {
 
         if (!turn) {
           const thread = this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
-          if (thread.status !== 'running') {
+          if (thread.status === 'idle') {
             this.runningTurnIds.delete(chatId);
             this.clearPendingRequestsForChat(chatId);
             return thread;
