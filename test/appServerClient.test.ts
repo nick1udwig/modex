@@ -244,10 +244,11 @@ test('flattenUserInputs preserves text and labels non-text inputs', () => {
   assert.equal(
     flattenUserInputs([
       { type: 'text', text: 'Inspect the repository' },
+      { type: 'image', url: 'data:image/jpeg;base64,AAAA' },
       { type: 'mention', name: 'filesystem', path: 'app://fs' },
       { type: 'localImage', path: '/tmp/screenshot.png' },
     ]),
-    ['Inspect the repository', '@filesystem', '[Local image] /tmp/screenshot.png'].join('\n'),
+    ['Inspect the repository', '[Image] Uploaded photo', '@filesystem', '[Local image] /tmp/screenshot.png'].join('\n'),
   );
 });
 
@@ -544,6 +545,60 @@ test('mapThread preserves non-message activity for later inspection', () => {
       { id: 'reasoning-1', kind: 'reasoning', status: 'completed', title: 'Reasoning', turnId: 'turn-activity' },
       { id: 'command-1', kind: 'command', status: 'completed', title: 'npm test', turnId: 'turn-activity' },
       { id: 'patch-1', kind: 'file-change', status: 'completed', title: 'src/config.ts', turnId: 'turn-activity' },
+    ],
+  );
+});
+
+test('mapThread normalizes structured file-change payloads from app-server', () => {
+  const thread = mapThread({
+    createdAt: 1_710_000_000,
+    cwd: '/workspace/project',
+    id: 'thr_file_change_structured',
+    modelProvider: 'openai',
+    name: null,
+    preview: '',
+    status: { type: 'idle' },
+    turns: [
+      {
+        id: 'turn-file-change',
+        items: [
+          {
+            changes: [
+              {
+                diff: '@@ -1 +1 @@',
+                kind: {
+                  move_path: null,
+                  type: 'update',
+                },
+                path: '/workspace/project/src/config.ts',
+              },
+            ],
+            id: 'patch-1',
+            status: 'completed',
+            type: 'fileChange',
+          },
+        ],
+        status: 'completed',
+      },
+    ],
+    updatedAt: 1_710_000_120,
+  });
+
+  assert.deepEqual(thread.messages, []);
+  assert.deepEqual(
+    thread.activity.map((entry) => ({
+      detail: entry.detail,
+      kind: entry.kind,
+      summary: entry.summary,
+      title: entry.title,
+    })),
+    [
+      {
+        detail: 'updated: /workspace/project/src/config.ts\n@@ -1 +1 @@',
+        kind: 'file-change',
+        summary: '/workspace/project/src/config.ts',
+        title: '/workspace/project/src/config.ts',
+      },
     ],
   );
 });

@@ -33,6 +33,15 @@ const VALID_CHAT_STATUSES = new Set<ChatStatus>(['idle', 'running']);
 const VALID_MESSAGE_ROLES = new Set<MessageRole>(['assistant', 'system', 'user']);
 const VALID_ACTIVITY_KINDS = new Set<ActivityKind>(['command', 'commentary', 'file-change', 'plan', 'reasoning']);
 const VALID_ACTIVITY_STATUSES = new Set<ActivityStatus>(['completed', 'failed', 'in-progress']);
+const MAX_STORED_CHAT_SUMMARIES = 60;
+const MAX_STORED_THREADS = 6;
+const MAX_STORED_MESSAGES = 40;
+const MAX_STORED_ACTIVITY = 60;
+const MAX_STORED_TEXT_CHARS = 4_000;
+const MAX_STORED_SUMMARY_CHARS = 320;
+const MAX_STORED_TITLE_CHARS = 120;
+const MAX_STORED_CWD_CHARS = 512;
+const MAX_STORED_TOKEN_USAGE_CHARS = 64;
 
 const dedupeIds = (chatIds: string[]) => {
   const seen = new Set<string>();
@@ -44,6 +53,14 @@ const dedupeIds = (chatIds: string[]) => {
     seen.add(chatId);
     return true;
   });
+};
+
+const truncateStoredText = (value: string, limit: number) => {
+  if (value.length <= limit) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 };
 
 const isStoredChatId = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
@@ -207,6 +224,63 @@ const sanitizeChatThread = (value: unknown): ChatThread | null => {
     cwd,
     messages,
     tokenUsageLabel,
+  };
+};
+
+const compactStoredSummary = (summary: ChatSummary): ChatSummary => ({
+  ...summary,
+  cwd: truncateStoredText(summary.cwd, MAX_STORED_CWD_CHARS),
+  preview: truncateStoredText(summary.preview, MAX_STORED_TEXT_CHARS),
+  title: truncateStoredText(summary.title, MAX_STORED_TITLE_CHARS),
+});
+
+const compactStoredThread = (thread: ChatThread): ChatThread => ({
+  ...thread,
+  activity: thread.activity.slice(-MAX_STORED_ACTIVITY).map((entry) => ({
+    ...entry,
+    detail: truncateStoredText(entry.detail, MAX_STORED_TEXT_CHARS),
+    summary: truncateStoredText(entry.summary, MAX_STORED_SUMMARY_CHARS),
+    title: truncateStoredText(entry.title, MAX_STORED_TITLE_CHARS),
+  })),
+  cwd: truncateStoredText(thread.cwd, MAX_STORED_CWD_CHARS),
+  messages: thread.messages.slice(-MAX_STORED_MESSAGES).map((message) => ({
+    ...message,
+    content: truncateStoredText(message.content, MAX_STORED_TEXT_CHARS),
+  })),
+  preview: truncateStoredText(thread.preview, MAX_STORED_TEXT_CHARS),
+  title: truncateStoredText(thread.title, MAX_STORED_TITLE_CHARS),
+  tokenUsageLabel: thread.tokenUsageLabel
+    ? truncateStoredText(thread.tokenUsageLabel, MAX_STORED_TOKEN_USAGE_CHARS)
+    : null,
+});
+
+const compactWorkspaceSnapshotForStorage = ({
+  activeChatId,
+  cachedChats,
+  cachedThreadsByChatId,
+  chatSettingsByChatId,
+  draftsByChatId,
+  openChatIds,
+}: WorkspaceSnapshot): WorkspaceSnapshot => {
+  const threadIds = dedupeIds([activeChatId ?? '', ...openChatIds].filter(isStoredChatId)).slice(0, MAX_STORED_THREADS);
+  const compactThreads = Object.fromEntries(
+    threadIds.flatMap((chatId) => {
+      const thread = cachedThreadsByChatId[chatId];
+      return thread ? [[chatId, compactStoredThread(thread)] satisfies [string, ChatThread]] : [];
+    }),
+  ) as Record<string, ChatThread>;
+  const compactChats = dedupeAndSortSummaries([
+    ...cachedChats.map(compactStoredSummary),
+    ...Object.values(compactThreads).map(summarizeCachedThread).map(compactStoredSummary),
+  ]).slice(0, MAX_STORED_CHAT_SUMMARIES);
+
+  return {
+    activeChatId,
+    cachedChats: compactChats,
+    cachedThreadsByChatId: compactThreads,
+    chatSettingsByChatId,
+    draftsByChatId,
+    openChatIds,
   };
 };
 
@@ -425,19 +499,28 @@ export const saveWorkspaceSnapshot = ({
   openChatIds,
 }: WorkspaceSnapshot) => {
   try {
+    const compactSnapshot = compactWorkspaceSnapshotForStorage({
+      activeChatId,
+      cachedChats,
+      cachedThreadsByChatId,
+      chatSettingsByChatId,
+      draftsByChatId,
+      openChatIds,
+    });
+
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        activeChatId,
-        cachedChats,
-        cachedThreadsByChatId,
+        activeChatId: compactSnapshot.activeChatId,
+        cachedChats: compactSnapshot.cachedChats,
+        cachedThreadsByChatId: compactSnapshot.cachedThreadsByChatId,
         chatSettingsByChatId: Object.fromEntries(
-          Object.entries(chatSettingsByChatId).filter(([, settings]) => settings.accessMode && settings.roots),
+          Object.entries(compactSnapshot.chatSettingsByChatId).filter(([, settings]) => settings.accessMode && settings.roots),
         ),
         draftsByChatId: Object.fromEntries(
-          Object.entries(draftsByChatId).filter(([, draft]) => draft.trim().length > 0),
+          Object.entries(compactSnapshot.draftsByChatId).filter(([, draft]) => draft.trim().length > 0),
         ),
-        openChatIds,
+        openChatIds: compactSnapshot.openChatIds,
       } satisfies WorkspaceSnapshot),
     );
   } catch {

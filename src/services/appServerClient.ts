@@ -160,9 +160,9 @@ type RawThreadItem =
       type: 'reasoning';
     }
   | {
-      aggregatedOutput?: string | null;
-      command?: string | null;
-      cwd?: string | null;
+      aggregatedOutput?: unknown;
+      command?: unknown;
+      cwd?: unknown;
       exitCode?: number | null;
       id: string;
       status?: 'completed' | 'declined' | 'failed' | 'inProgress' | null;
@@ -170,9 +170,9 @@ type RawThreadItem =
     }
   | {
       changes?: Array<{
-        diff?: string | null;
-        kind?: string | null;
-        path?: string | null;
+        diff?: unknown;
+        kind?: unknown;
+        path?: unknown;
       }> | null;
       id: string;
       status?: 'completed' | 'declined' | 'failed' | 'inProgress' | null;
@@ -455,6 +455,42 @@ const textSectionsFromUnknown = (value: unknown): string[] => {
 
 const compactSummaryText = (text: unknown) => textSectionFromUnknown(text).replace(/\s+/g, ' ').trim();
 
+const fileChangeKindText = (value: unknown) => {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  if (!value || typeof value !== 'object') {
+    return '';
+  }
+
+  const record = value as Record<string, unknown>;
+  const kind = textSectionFromUnknown(record.type ?? record.kind);
+  const movePath = textSectionFromUnknown(record.move_path ?? record.movePath);
+
+  if (!kind) {
+    return '';
+  }
+
+  if (kind === 'move') {
+    return movePath ? `moved to ${movePath}` : 'moved';
+  }
+
+  if (kind === 'update') {
+    return 'updated';
+  }
+
+  if (kind === 'create') {
+    return 'created';
+  }
+
+  if (kind === 'delete') {
+    return 'deleted';
+  }
+
+  return kind;
+};
+
 const normalizeRoots = (roots: string[]) => {
   const seen = new Set<string>();
   return roots
@@ -651,7 +687,7 @@ const sleep = (durationMs: number) =>
   });
 
 const detailLine = (label: string, value: string | null | undefined) => {
-  const text = value?.trim();
+  const text = textSectionFromUnknown(value);
   return text ? `${label}: ${text}` : null;
 };
 
@@ -984,9 +1020,9 @@ const activityEntryFromItem = (
   }
 
   if (isCommandExecutionItem(item)) {
-    const command = item.command?.trim() ?? '';
-    const cwd = item.cwd?.trim() ?? '';
-    const output = item.aggregatedOutput?.trim() ?? '';
+    const command = textSectionFromUnknown(item.command);
+    const cwd = textSectionFromUnknown(item.cwd);
+    const output = textSectionFromUnknown(item.aggregatedOutput);
     const detailLines = [
       command ? `Command: ${command}` : null,
       cwd ? `Directory: ${cwd}` : null,
@@ -1009,9 +1045,9 @@ const activityEntryFromItem = (
   if (isFileChangeItem(item)) {
     const changes = (item.changes ?? [])
       .map((change) => {
-        const path = change.path?.trim() ?? '';
-        const kind = change.kind?.trim() ?? '';
-        const diff = change.diff?.trim() ?? '';
+        const path = textSectionFromUnknown(change.path);
+        const kind = fileChangeKindText(change.kind);
+        const diff = textSectionFromUnknown(change.diff);
         if (!path) {
           return null;
         }
@@ -1025,7 +1061,7 @@ const activityEntryFromItem = (
     }
 
     const fileList = (item.changes ?? [])
-      .map((change) => change.path?.trim() ?? '')
+      .map((change) => textSectionFromUnknown(change.path))
       .filter((path): path is string => path.length > 0);
 
     return {
@@ -1138,8 +1174,7 @@ export const flattenUserInputs = (inputs: RawUserInput[]) =>
         case 'text':
           return textSectionFromUnknown(input.text);
         case 'image': {
-          const url = textSectionFromUnknown(input.url);
-          return url ? `[Image] ${url}` : '[Image]';
+          return '[Image] Uploaded photo';
         }
         case 'localImage': {
           const path = textSectionFromUnknown(input.path);
