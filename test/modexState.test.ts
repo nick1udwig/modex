@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ChatSummary, ChatThread } from '../src/app/types.ts';
 import {
+  appendLiveActivityDelta,
   defaultOpenTabs,
+  deriveLiveActivity,
   ensureTab,
+  mergeLiveActivity,
   mergeBootstrapThread,
   mergeThreadSummary,
   setTabStatusIfOpen,
   setTabUnreadIfOpen,
+  upsertLiveActivity,
   updateChatSummary,
 } from '../src/state/modexState.ts';
 
@@ -246,4 +250,123 @@ test('mergeBootstrapThread prefers hydrated backend state when cached data is ol
   };
 
   assert.deepEqual(mergeBootstrapThread(hydrated, current), hydrated);
+});
+
+test('deriveLiveActivity keeps only running entries for the live stack', () => {
+  assert.deepEqual(
+    deriveLiveActivity({
+      activity: [
+        {
+          detail: 'Inspecting',
+          id: 'entry-complete',
+          kind: 'commentary',
+          status: 'completed',
+          summary: 'Inspecting',
+          title: 'Agent update',
+          turnId: 'turn-1',
+        },
+        {
+          detail: 'Running tests',
+          id: 'entry-live',
+          kind: 'commentary',
+          status: 'in-progress',
+          summary: 'Running tests',
+          title: 'Draft reply',
+          turnId: 'turn-2',
+        },
+      ],
+      status: 'running',
+    }),
+    [
+      {
+        detail: 'Running tests',
+        id: 'entry-live',
+        kind: 'commentary',
+        status: 'in-progress',
+        summary: 'Running tests',
+        title: 'Draft reply',
+        turnId: 'turn-2',
+      },
+    ],
+  );
+});
+
+test('upsertLiveActivity and appendLiveActivityDelta preserve the newest live detail', () => {
+  const seeded = upsertLiveActivity([], {
+    detail: 'Checking the command output',
+    id: 'entry-live',
+    kind: 'commentary',
+    status: 'in-progress',
+    summary: 'Checking the command output',
+    title: 'Draft reply',
+    turnId: 'turn-2',
+  });
+
+  assert.deepEqual(
+    appendLiveActivityDelta(seeded, {
+      delta: ' before I answer.',
+      entryId: 'entry-live',
+      turnId: 'turn-2',
+    }),
+    [
+      {
+        detail: 'Checking the command output before I answer.',
+        id: 'entry-live',
+        kind: 'commentary',
+        status: 'in-progress',
+        summary: 'Checking the command output before I answer.',
+        title: 'Draft reply',
+        turnId: 'turn-2',
+      },
+    ],
+  );
+});
+
+test('mergeLiveActivity keeps local completed cards until the backend thread settles', () => {
+  assert.deepEqual(
+    mergeLiveActivity(
+      [
+        {
+          detail: 'Command: bash -lc "npm test"',
+          id: 'tool-1',
+          kind: 'command',
+          status: 'completed',
+          summary: 'bash -lc "npm test"',
+          title: 'bash -lc "npm test"',
+          turnId: 'turn-2',
+        },
+      ],
+      [
+        {
+          detail: 'Looking at the repo',
+          id: 'entry-live',
+          kind: 'commentary',
+          status: 'in-progress',
+          summary: 'Looking at the repo',
+          title: 'Draft reply',
+          turnId: 'turn-2',
+        },
+      ],
+    ),
+    [
+      {
+        detail: 'Command: bash -lc "npm test"',
+        id: 'tool-1',
+        kind: 'command',
+        status: 'completed',
+        summary: 'bash -lc "npm test"',
+        title: 'bash -lc "npm test"',
+        turnId: 'turn-2',
+      },
+      {
+        detail: 'Looking at the repo',
+        id: 'entry-live',
+        kind: 'commentary',
+        status: 'in-progress',
+        summary: 'Looking at the repo',
+        title: 'Draft reply',
+        turnId: 'turn-2',
+      },
+    ],
+  );
 });

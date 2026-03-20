@@ -368,7 +368,7 @@ test('mapThread flattens turn history into chat messages', () => {
   );
 });
 
-test('mapThread exposes in-progress activity items as transient assistant updates', () => {
+test('mapThread keeps in-progress activity in the activity stack instead of the message history', () => {
   const thread = mapThread({
     createdAt: 1_710_000_000,
     cwd: '/workspace/project',
@@ -408,15 +408,66 @@ test('mapThread exposes in-progress activity items as transient assistant update
 
   assert.deepEqual(
     thread.messages.map((message) => message.content),
-    [
-      'Check the follow-up behavior',
-      'Reading the live thread data now.',
-      'Running command: npm test\nCommand: npm test\nDirectory: /workspace/project',
-    ],
+    ['Check the follow-up behavior'],
   );
   assert.deepEqual(
-    thread.activity.map((entry) => entry.status),
-    ['in-progress', 'in-progress'],
+    thread.activity.map((entry) => ({
+      status: entry.status,
+      summary: entry.summary,
+      title: entry.title,
+    })),
+    [
+      { status: 'in-progress', summary: 'Reading the live thread data now.', title: 'Agent update' },
+      { status: 'in-progress', summary: 'npm test', title: 'npm test' },
+    ],
+  );
+});
+
+test('mapThread exposes in-progress assistant replies in activity so the live stack can render them', () => {
+  const thread = mapThread({
+    createdAt: 1_710_000_000,
+    cwd: '/workspace/project',
+    id: 'thr_live_reply',
+    modelProvider: 'openai',
+    name: null,
+    preview: '',
+    status: { type: 'active', activeFlags: [] },
+    turns: [
+      {
+        id: 'turn-progress',
+        items: [
+          {
+            content: [{ type: 'text', text: 'Summarize the repo' }],
+            id: 'item-user',
+            type: 'userMessage',
+          },
+          {
+            id: 'reply-1',
+            phase: 'final_answer',
+            text: 'I am reading the repository structure now.',
+            type: 'agentMessage',
+          },
+        ],
+        status: 'inProgress',
+      },
+    ],
+    updatedAt: 1_710_000_120,
+  });
+
+  assert.deepEqual(thread.messages.map((message) => message.content), ['Summarize the repo']);
+  assert.deepEqual(
+    thread.activity.map((entry) => ({
+      detail: entry.detail,
+      status: entry.status,
+      title: entry.title,
+    })),
+    [
+      {
+        detail: 'I am reading the repository structure now.',
+        status: 'in-progress',
+        title: 'Draft reply',
+      },
+    ],
   );
 });
 
@@ -789,4 +840,62 @@ test('sendMessage waits for completed turn output to materialize before returnin
 
   assert.equal(readCount, 2);
   assert.equal(thread.messages[thread.messages.length - 1]?.content, 'Here is the follow-up reply.');
+});
+
+test('handleNotification emits live activity events for tool items and agent deltas', () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  const events: Array<Record<string, unknown>> = [];
+
+  (client as any).emit = (event: Record<string, unknown>) => {
+    events.push(event);
+  };
+  (client as any).queueThreadRefresh = () => undefined;
+
+  (client as any).handleNotification({
+    method: 'item/started',
+    params: {
+      item: {
+        command: 'bash -lc "npm test"',
+        cwd: '/workspace/project',
+        id: 'command-1',
+        status: 'inProgress',
+        type: 'commandExecution',
+      },
+      threadId: 'chat-1',
+      turnId: 'turn-1',
+    },
+  });
+
+  (client as any).handleNotification({
+    method: 'item/agentMessage/delta',
+    params: {
+      delta: 'Reading the README now.',
+      itemId: 'reply-1',
+      threadId: 'chat-1',
+      turnId: 'turn-1',
+    },
+  });
+
+  assert.deepEqual(events, [
+    {
+      chatId: 'chat-1',
+      entry: {
+        detail: 'Command: bash -lc "npm test"\nDirectory: /workspace/project',
+        id: 'command-1',
+        kind: 'command',
+        status: 'in-progress',
+        summary: 'bash -lc "npm test"',
+        title: 'bash -lc "npm test"',
+        turnId: 'turn-1',
+      },
+      type: 'activity-upsert',
+    },
+    {
+      chatId: 'chat-1',
+      delta: 'Reading the README now.',
+      entryId: 'reply-1',
+      turnId: 'turn-1',
+      type: 'activity-delta',
+    },
+  ]);
 });

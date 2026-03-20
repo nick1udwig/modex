@@ -922,9 +922,10 @@ const activityEntryFromItem = (
   turnId: string,
   options?: {
     fallbackStatus?: ActivityStatus;
+    includeVisibleAgentMessages?: boolean;
   },
 ): ActivityEntry | null => {
-  if (isCommentaryAgentMessageItem(item)) {
+  if (isCommentaryAgentMessageItem(item) || (options?.includeVisibleAgentMessages && isVisibleAgentMessageItem(item))) {
     const detail = textSectionFromUnknown(item.text);
     if (!detail) {
       return null;
@@ -936,7 +937,7 @@ const activityEntryFromItem = (
       kind: 'commentary',
       status: options?.fallbackStatus ?? 'completed',
       summary: compactPreview(detail),
-      title: 'Agent update',
+      title: isCommentaryAgentMessageItem(item) ? 'Agent update' : 'Draft reply',
       turnId,
     } satisfies ActivityEntry;
   }
@@ -1040,58 +1041,11 @@ const mapThreadActivity = (thread: RawThread): ActivityEntry[] =>
     turn.items.flatMap<ActivityEntry>((item) => {
       const entry = activityEntryFromItem(item, turn.id, {
         fallbackStatus: turn.status === 'inProgress' ? 'in-progress' : 'completed',
+        includeVisibleAgentMessages: turn.status === 'inProgress',
       });
       return entry ? [entry] : [];
     }),
   );
-
-const progressMessageFromActivity = (entry: ActivityEntry, createdAt: string): Message | null => {
-  const body = entry.detail.trim();
-  let content = body;
-
-  switch (entry.kind) {
-    case 'plan':
-      content = body ? `Plan\n${body}` : 'Plan';
-      break;
-    case 'reasoning':
-      content = body ? `Reasoning\n${body}` : 'Reasoning';
-      break;
-    case 'command': {
-      const prefix =
-        entry.status === 'failed'
-          ? 'Command failed'
-          : entry.status === 'completed'
-            ? 'Command finished'
-            : 'Running command';
-      content = `${prefix}: ${entry.title}${body ? `\n${body}` : ''}`;
-      break;
-    }
-    case 'file-change': {
-      const prefix =
-        entry.status === 'failed'
-          ? 'File changes failed'
-          : entry.status === 'completed'
-            ? 'Prepared file changes'
-            : 'Preparing file changes';
-      content = `${prefix}: ${entry.title}${body ? `\n${body}` : ''}`;
-      break;
-    }
-    default:
-      break;
-  }
-
-  if (compactSummaryText(content).length === 0) {
-    return null;
-  }
-
-  return {
-    content,
-    createdAt,
-    id: entry.id,
-    role: 'assistant',
-    turnId: entry.turnId,
-  };
-};
 
 const turnHasRenderableOutput = (turn: RawTurn) =>
   turn.items.some((item) => {
@@ -1233,6 +1187,10 @@ export const mapThreadMessages = (thread: RawThread): Message[] => {
       }
 
       if (isVisibleAgentMessageItem(item)) {
+        if (turn.status === 'inProgress') {
+          continue;
+        }
+
         const content = textSectionFromUnknown(item.text);
         if (content.length === 0) {
           continue;
@@ -1249,20 +1207,6 @@ export const mapThreadMessages = (thread: RawThread): Message[] => {
         continue;
       }
 
-      if (turn.status !== 'inProgress') {
-        continue;
-      }
-
-      const activityEntry = activityEntryFromItem(item, turn.id, { fallbackStatus: 'in-progress' });
-      const progressMessage = activityEntry
-        ? progressMessageFromActivity(activityEntry, messageTimestamp(thread.createdAt, offset))
-        : null;
-      if (!progressMessage) {
-        continue;
-      }
-
-      messages.push(progressMessage);
-      offset += 1;
     }
   }
 
@@ -2174,8 +2118,18 @@ export class AppServerClient implements RemoteAppClient {
           return;
         }
 
-        const message = this.mapLiveMessage(params.item, params.turnId);
         this.queueThreadRefresh(params.threadId);
+        const activity = this.mapLiveActivityEntry(params.item, params.turnId, 'in-progress');
+        if (activity) {
+          this.emit({
+            chatId: params.threadId,
+            entry: activity,
+            type: 'activity-upsert',
+          });
+          return;
+        }
+
+        const message = this.mapLiveMessage(params.item, params.turnId);
         if (!message) {
           return;
         }
@@ -2198,8 +2152,9 @@ export class AppServerClient implements RemoteAppClient {
         this.emit({
           chatId: params.threadId,
           delta: params.delta,
-          messageId: params.itemId,
-          type: 'message-delta',
+          entryId: params.itemId,
+          turnId: params.turnId,
+          type: 'activity-delta',
         });
         return;
       }
@@ -2210,8 +2165,18 @@ export class AppServerClient implements RemoteAppClient {
           return;
         }
 
-        const message = this.mapLiveMessage(params.item, params.turnId);
         this.queueThreadRefresh(params.threadId);
+        const activity = this.mapLiveActivityEntry(params.item, params.turnId, 'completed');
+        if (activity) {
+          this.emit({
+            chatId: params.threadId,
+            entry: activity,
+            type: 'activity-upsert',
+          });
+          return;
+        }
+
+        const message = this.mapLiveMessage(params.item, params.turnId);
         if (!message) {
           return;
         }
@@ -2433,6 +2398,13 @@ export class AppServerClient implements RemoteAppClient {
       role: 'assistant',
       turnId,
     };
+  }
+
+  private mapLiveActivityEntry(item: RawThreadItem, turnId: string, fallbackStatus: ActivityStatus) {
+    return activityEntryFromItem(item, turnId, {
+      fallbackStatus,
+      includeVisibleAgentMessages: true,
+    });
   }
 
   private mergeThread(thread: ChatThread) {

@@ -1,4 +1,4 @@
-import type { ChatSummary, ChatTab, ChatThread, Message } from '../app/types';
+import type { ActivityEntry, ActivityStatus, ChatSummary, ChatTab, ChatThread, Message } from '../app/types';
 
 export const mergeThreadSummary = (thread: ChatThread, summary: ChatSummary): ChatThread => ({
   ...thread,
@@ -11,6 +11,14 @@ export const mergeThreadSummary = (thread: ChatThread, summary: ChatSummary): Ch
 
 const hasTransientLocalMessages = (thread: Pick<ChatThread, 'messages'>) =>
   thread.messages.some((message) => message.id.startsWith('optimistic-') || (message.role === 'assistant' && message.turnId === null));
+
+const ACTIVITY_STATUS_PRIORITY: Record<ActivityStatus, number> = {
+  completed: 2,
+  failed: 2,
+  'in-progress': 1,
+};
+
+const compactActivitySummary = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 export const mergeBootstrapThread = (hydrated: ChatThread, current?: ChatThread): ChatThread => {
   if (!current) {
@@ -33,6 +41,64 @@ export const mergeBootstrapThread = (hydrated: ChatThread, current?: ChatThread)
     tokenUsageLabel: current.tokenUsageLabel ?? hydrated.tokenUsageLabel,
     updatedAt: current.updatedAt,
   };
+};
+
+const mergeActivityEntry = (current: ActivityEntry, incoming: ActivityEntry): ActivityEntry => {
+  const detail = incoming.detail.length >= current.detail.length ? incoming.detail : current.detail;
+  const summary = compactActivitySummary(detail) || incoming.summary || current.summary;
+  const status =
+    ACTIVITY_STATUS_PRIORITY[incoming.status] >= ACTIVITY_STATUS_PRIORITY[current.status] ? incoming.status : current.status;
+
+  return {
+    ...current,
+    ...incoming,
+    detail,
+    status,
+    summary,
+    title: incoming.title || current.title,
+  };
+};
+
+export const deriveLiveActivity = (thread: Pick<ChatThread, 'activity' | 'status'>) =>
+  thread.status === 'running' ? thread.activity.filter((entry) => entry.status === 'in-progress') : [];
+
+export const upsertLiveActivity = (entries: ActivityEntry[], incoming: ActivityEntry) => {
+  const index = entries.findIndex((entry) => entry.id === incoming.id);
+  if (index === -1) {
+    return [...entries, incoming];
+  }
+
+  return entries.map((entry, entryIndex) => (entryIndex === index ? mergeActivityEntry(entry, incoming) : entry));
+};
+
+export const mergeLiveActivity = (current: ActivityEntry[], incoming: ActivityEntry[]) => {
+  const turnId = incoming[incoming.length - 1]?.turnId ?? current[current.length - 1]?.turnId ?? null;
+  const currentEntries = turnId ? current.filter((entry) => entry.turnId === turnId) : current;
+  const incomingEntries = turnId ? incoming.filter((entry) => entry.turnId === turnId) : incoming;
+
+  return incomingEntries.reduce(upsertLiveActivity, currentEntries);
+};
+
+export const appendLiveActivityDelta = (
+  entries: ActivityEntry[],
+  payload: {
+    delta: string;
+    entryId: string;
+    turnId: string;
+  },
+) => {
+  const existing = entries.find((entry) => entry.id === payload.entryId);
+  const detail = `${existing?.detail ?? ''}${payload.delta}`;
+
+  return upsertLiveActivity(entries, {
+    detail,
+    id: payload.entryId,
+    kind: existing?.kind ?? 'commentary',
+    status: existing?.status ?? 'in-progress',
+    summary: compactActivitySummary(detail),
+    title: existing?.title ?? 'Agent reply',
+    turnId: existing?.turnId ?? payload.turnId,
+  });
 };
 
 export const ensureTab = (

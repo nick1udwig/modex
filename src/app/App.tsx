@@ -1169,6 +1169,7 @@ export const App = () => {
                     activeSearchHitId={activeSearchHitId}
                     busy={Boolean(isBusy)}
                     chat={modex.activeChat}
+                    liveActivity={modex.activeLiveActivity}
                     loading={modex.loading}
                     modelOptions={modelOptions}
                     onSelectModel={applyModelSelection}

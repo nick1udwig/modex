@@ -4,11 +4,13 @@ import { renderMessageMarkdown } from '../app/messageMarkdown';
 import { positionMessageMenu } from '../app/messageMenuPosition';
 import type { ActivityEntry, ChatThread, ModelOption, ReasoningEffort } from '../app/types';
 import { Icon } from './Icon';
+import { LiveActivityStack } from './LiveActivityStack';
 
 interface ConversationViewProps {
   activeSearchHitId?: string | null;
   busy: boolean;
   chat: ChatThread | null;
+  liveActivity: ActivityEntry[];
   loading: boolean;
   modelOptions: ModelOption[];
   onSelectModel: (modelId: string) => void;
@@ -100,6 +102,7 @@ export const ConversationView = ({
   activeSearchHitId = null,
   busy,
   chat,
+  liveActivity,
   loading,
   modelOptions,
   onSelectModel,
@@ -663,6 +666,9 @@ export const ConversationView = ({
             </div>
           );
         })}
+
+        {busy && liveActivity.length > 0 ? <LiveActivityStack entries={liveActivity} searchQuery={searchQuery} /> : null}
+
         <div ref={bottomRef} />
       </div>
 

@@ -161,6 +161,18 @@ export type RemoteThreadEvent =
       message: Message;
     }
   | {
+      type: 'activity-upsert';
+      chatId: string;
+      entry: ActivityEntry;
+    }
+  | {
+      type: 'activity-delta';
+      chatId: string;
+      delta: string;
+      entryId: string;
+      turnId: string;
+    }
+  | {
       type: 'token-usage';
       chatId: string;
       label: string | null;
