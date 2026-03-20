@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: docker/e2e/Dockerfile
     image: modex-e2e:local
+    cap_add:
+      - SYS_ADMIN
     environment:
       MODEX_APP_SERVER_EXTRA_ARGS: ${MODEX_APP_SERVER_EXTRA_ARGS:-}
       MODEX_APP_SERVER_LISTEN: ws://0.0.0.0:4222
@@ -25,6 +27,9 @@ services:
     ports:
       - "${MODEX_E2E_PORT:-8080}:8080"
     restart: unless-stopped
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
     volumes:
       - .:/workspace/modex
       - ${HOME}/.codex:/host-codex:ro

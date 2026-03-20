@@ -61,13 +61,48 @@ build_sidecar() {
 derive_sidecar_origins() {
   local public_origin=${MODEX_PUBLIC_ORIGIN:-http://localhost:8080}
   local origins=${MODEX_SIDECAR_ALLOWED_ORIGINS:-}
+  local public_scheme=
+  local public_hostport=
+  local public_host=
+  local public_port=
+  local alternate_origin=
 
   if [ -n "$origins" ]; then
     printf '%s' "$origins"
     return
   fi
 
-  printf '%s,%s,%s' "$public_origin" 'http://localhost:8080' 'http://127.0.0.1:8080'
+  public_scheme=${public_origin%%://*}
+  public_hostport=${public_origin#*://}
+  public_host=${public_hostport%%:*}
+  if [ "$public_hostport" = "$public_host" ]; then
+    if [ "$public_scheme" = "https" ]; then
+      public_port=443
+    else
+      public_port=80
+    fi
+  else
+    public_port=${public_hostport##*:}
+  fi
+
+  case "$public_host" in
+    localhost)
+      alternate_origin="${public_scheme}://127.0.0.1:${public_port}"
+      ;;
+    127.0.0.1)
+      alternate_origin="${public_scheme}://localhost:${public_port}"
+      ;;
+    *)
+      alternate_origin=
+      ;;
+  esac
+
+  if [ -n "$alternate_origin" ]; then
+    printf '%s,%s' "$public_origin" "$alternate_origin"
+    return
+  fi
+
+  printf '%s' "$public_origin"
 }
 
 cleanup() {
