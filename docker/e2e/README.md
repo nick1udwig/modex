@@ -41,6 +41,14 @@ After source changes while the harness is already running, restart the service t
 docker compose -f compose.e2e.yaml restart modex-e2e
 ```
 
+After a bug is fixed, remove stale harness containers before the next run:
+
+```bash
+docker compose -f compose.e2e.yaml down --remove-orphans
+```
+
+Only leave an old broken container behind if the bug is still unresolved and a human needs to inspect that exact container.
+
 ## Important environment
 
 - `OPENAI_API_KEY`: optional, but required for voice transcription through the sidecar.
@@ -57,6 +65,7 @@ docker compose -f compose.e2e.yaml restart modex-e2e
 - App-server file edits land directly in the mounted host repo.
 - The compose file only mounts `~/.codex` by default. If you also want SSH or git config inside the container for agent tasks, add extra bind mounts in `compose.e2e.yaml`.
 - Those extra container permissions are intentional for the harness, because otherwise Codex sandboxed commands fail with bubblewrap or `unshare` errors even for basic read-only inspection.
+- If you intentionally preserve a broken container for later human inspection, record the container name and the unresolved bug in your handoff.
 
 ## Manual smoke flows
 

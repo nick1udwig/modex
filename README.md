@@ -49,6 +49,14 @@ Build for production:
 npm run build
 ```
 
+## Docker E2E Harness
+
+For agent-driven end-to-end debugging, use `docker compose -f compose.e2e.yaml up --build`.
+
+After a bug is fixed, clean up stale harness containers with `docker compose -f compose.e2e.yaml down --remove-orphans`.
+
+Only preserve an old broken harness container when the bug is still unresolved and a human needs that exact container for inspection.
+
 ## Go Sidecar
 
 The repo now also contains `modex-sidecar`, a Go WebSocket service for capabilities that the Codex app-server does not currently expose directly:
@@ -81,6 +89,7 @@ Protocol and env details: [backend/sidecar/README.md](/home/nick/git/modex/backe
 - Chats persist independently from tabs. Closing a tab does not remove the chat from the sidebar.
 - Each open tab carries its own status from the app-server thread state, with active threads mapped to `running`.
 - Thread history comes from `thread/list` and `thread/read`; sending a prompt uses `turn/start` directly for active threads and falls back to `thread/resume` only when the server reports the thread is unloaded.
+- Chat messages render a markdown subset, including headings, lists, blockquotes, code fences, inline code, emphasis, and links.
 - Open tabs, the active chat, and unsent drafts are restored after a reload so the workspace behaves more like a mobile browser session.
 
 ## Next Steps

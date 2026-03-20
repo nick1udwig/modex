@@ -59,6 +59,9 @@ Work style: telegraph; noun-phrases ok; drop grammar; min tokens.
 - Release: read `docs/RELEASING.md` (or find best checklist if missing).
 - Reminder: check `~/.profile` for missing env keys.
 - For Modex E2E debug of agent-made changes, prefer `docker compose -f compose.e2e.yaml up --build`; it bind-mounts the live repo, rebuilds frontend + sidecar on startup, and uses host `~/.codex`.
+- When an E2E Docker bug is resolved, remove stale harness containers with `docker compose -f compose.e2e.yaml down --remove-orphans` or `docker rm -f <old-container>...`.
+- Only preserve an old broken harness container if the bug is still unresolved and a human needs that exact container for inspection.
+- If you preserve a broken harness container, mention its name and why it was kept in the handoff.
 
 ## Git
 - Safe by default: `git status/diff/log`. Push only when user asks.
