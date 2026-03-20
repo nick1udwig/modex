@@ -62,6 +62,11 @@ const mergeActivityEntry = (current: ActivityEntry, incoming: ActivityEntry): Ac
 export const deriveLiveActivity = (thread: Pick<ChatThread, 'activity' | 'status'>) =>
   thread.status === 'running' ? thread.activity.filter((entry) => entry.status === 'in-progress') : [];
 
+export const downgradeMissingThread = (thread: ChatThread): ChatThread => ({
+  ...thread,
+  status: 'idle',
+});
+
 export const upsertLiveActivity = (entries: ActivityEntry[], incoming: ActivityEntry) => {
   const index = entries.findIndex((entry) => entry.id === incoming.id);
   if (index === -1) {

@@ -636,6 +636,12 @@ const compactPreview = (text: string) => compactSummaryText(text) || 'Start a ne
 export const shouldResumeAfterTurnStartError = (error: unknown) =>
   error instanceof Error && error.message.includes('thread not found:');
 
+export const isAppServerThreadNotFoundError = (error: unknown) =>
+  error instanceof Error &&
+  (error.message.includes('thread not found:') ||
+    error.message.includes('invalid thread id:') ||
+    error.message.includes('thread not loaded:'));
+
 const isAppServerUnavailableError = (error: unknown) =>
   error instanceof Error && error.message.startsWith('Unable to connect to app-server at ');
 
@@ -1545,9 +1551,22 @@ export class AppServerClient implements RemoteAppClient {
   }
 
   async getChat(chatId: string) {
-    const rawThread = await this.readRawThread(chatId);
-    const thread = this.storeMappedThread(rawThread);
-    return thread;
+    try {
+      const rawThread = await this.readRawThread(chatId);
+      const thread = this.storeMappedThread(rawThread);
+      return thread;
+    } catch (error) {
+      if (!isAppServerThreadNotFoundError(error)) {
+        throw error;
+      }
+
+      const thread = this.markThreadIdleIfCached(chatId);
+      if (thread) {
+        return thread;
+      }
+
+      throw error;
+    }
   }
 
   async listChats() {
@@ -1639,11 +1658,20 @@ export class AppServerClient implements RemoteAppClient {
     const connection = await this.ensureConnection();
     let turnId: string | null = this.runningTurnIds.get(chatId) ?? null;
     if (!turnId) {
-      const rawThread = await this.readRawThread(chatId);
-      this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
-      turnId = findActiveTurnId(rawThread);
-      if (!turnId) {
-        return;
+      try {
+        const rawThread = await this.readRawThread(chatId);
+        this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
+        turnId = findActiveTurnId(rawThread);
+        if (!turnId) {
+          return;
+        }
+      } catch (error) {
+        if (isAppServerThreadNotFoundError(error)) {
+          this.markThreadIdleIfCached(chatId);
+          return;
+        }
+
+        throw error;
       }
     }
 
@@ -2530,6 +2558,31 @@ export class AppServerClient implements RemoteAppClient {
     this.syncThreadRefreshTimer();
   }
 
+  private markThreadIdleIfCached(threadId: string) {
+    this.runningTurnIds.delete(threadId);
+    this.clearPendingRequestsForChat(threadId);
+
+    const cachedThread = this.threadCache.get(threadId);
+    if (cachedThread) {
+      const nextThread = {
+        ...cachedThread,
+        status: 'idle' as const,
+      };
+      this.storeThread(nextThread);
+      return nextThread;
+    }
+
+    const cachedSummary = this.summaryCache.get(threadId);
+    if (cachedSummary && cachedSummary.status !== 'idle') {
+      this.storeSummary({
+        ...cachedSummary,
+        status: 'idle',
+      });
+    }
+
+    return null;
+  }
+
   private async refreshThread(threadId: string, options?: { suppressError?: boolean }) {
     if (this.refreshingThreadIds.has(threadId)) {
       return;
@@ -2541,6 +2594,11 @@ export class AppServerClient implements RemoteAppClient {
       const rawThread = await this.readRawThread(threadId);
       this.storeMappedThread(rawThread, { reportRecoveredFailure: true });
     } catch (error) {
+      if (isAppServerThreadNotFoundError(error)) {
+        this.markThreadIdleIfCached(threadId);
+        return;
+      }
+
       if (!options?.suppressError) {
         this.emit({
           chatId: threadId,

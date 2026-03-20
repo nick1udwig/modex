@@ -5,6 +5,7 @@ import {
   appendLiveActivityDelta,
   defaultOpenTabs,
   deriveLiveActivity,
+  downgradeMissingThread,
   ensureTab,
   mergeLiveActivity,
   mergeBootstrapThread,
@@ -368,5 +369,32 @@ test('mergeLiveActivity keeps local completed cards until the backend thread set
         turnId: 'turn-2',
       },
     ],
+  );
+});
+
+test('downgradeMissingThread clears stale running state when the backend no longer knows the thread', () => {
+  assert.deepEqual(
+    downgradeMissingThread({
+      activity: [],
+      cwd: '/workspace/modex',
+      id: 'chat-missing',
+      messages: [],
+      preview: 'Stale running preview',
+      status: 'running',
+      title: 'Stale chat',
+      tokenUsageLabel: null,
+      updatedAt: '2026-03-20T00:00:00.000Z',
+    }),
+    {
+      activity: [],
+      cwd: '/workspace/modex',
+      id: 'chat-missing',
+      messages: [],
+      preview: 'Stale running preview',
+      status: 'idle',
+      title: 'Stale chat',
+      tokenUsageLabel: null,
+      updatedAt: '2026-03-20T00:00:00.000Z',
+    },
   );
 });

@@ -16,6 +16,7 @@ import {
   appendLiveActivityDelta,
   defaultOpenTabs,
   deriveLiveActivity,
+  downgradeMissingThread,
   ensureTab,
   mergeLiveActivity,
   mergeBootstrapThread,
@@ -28,6 +29,7 @@ import {
   upsertLiveActivity,
   updateChatSummary,
 } from './modexState';
+import { isAppServerThreadNotFoundError } from '../services/appServerClient';
 import { loadWorkspaceSnapshot, saveWorkspaceSnapshot } from './workspaceStorage';
 
 interface ModexState {
@@ -463,10 +465,22 @@ export const useModexApp = (client: RemoteAppClient) => {
         const chatIdsToHydrate = [
           ...new Set([activeChatId, ...openTabs.map((tab) => tab.chatId)].filter((chatId): chatId is string => Boolean(chatId))),
         ];
-        const hydratedThreads = (
-          await Promise.allSettled(chatIdsToHydrate.map((chatId) => client.getChat(chatId)))
-        )
-          .flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+        const hydratedResults = await Promise.allSettled(chatIdsToHydrate.map((chatId) => client.getChat(chatId)));
+        const missingHydrationChatIds = new Set<string>();
+        const hydratedThreads = hydratedResults.flatMap((result, index) => {
+          if (result.status === 'fulfilled') {
+            return [result.value];
+          }
+
+          if (isAppServerThreadNotFoundError(result.reason)) {
+            const missingChatId = chatIdsToHydrate[index];
+            if (missingChatId) {
+              missingHydrationChatIds.add(missingChatId);
+            }
+          }
+
+          return [];
+        });
 
         if (cancelled) {
           return;
@@ -477,7 +491,12 @@ export const useModexApp = (client: RemoteAppClient) => {
         const cachedThreads = Object.fromEntries(
           Object.entries(workspace?.cachedThreadsByChatId ?? {}).map(([chatId, thread]) => {
             const summary = summaryByChatId.get(chatId);
-            return [chatId, summary ? mergeThreadSummary(thread, summary) : thread] satisfies [string, ChatThread];
+            const nextThread = summary
+              ? mergeThreadSummary(thread, summary)
+              : missingHydrationChatIds.has(chatId)
+                ? downgradeMissingThread(thread)
+                : thread;
+            return [chatId, nextThread] satisfies [string, ChatThread];
           }),
         );
         const chatMap = {
@@ -500,6 +519,11 @@ export const useModexApp = (client: RemoteAppClient) => {
           };
 
           Object.entries(current.chatMap).forEach(([chatId, thread]) => {
+            if (missingHydrationChatIds.has(chatId)) {
+              mergedChatMap[chatId] = downgradeMissingThread(mergedChatMap[chatId] ?? thread);
+              return;
+            }
+
             mergedChatMap[chatId] = mergeBootstrapThread(mergedChatMap[chatId] ?? thread, thread);
           });
 

@@ -7,6 +7,7 @@ import {
   collectThreadIdsToRefresh,
   findActiveTurnId,
   flattenUserInputs,
+  isAppServerThreadNotFoundError,
   isAppServerConnectionClosedError,
   isAppServerTurnWaitTimeoutError,
   latestTurnFailure,
@@ -614,6 +615,13 @@ test('isAppServerConnectionClosedError only matches established websocket discon
   assert.equal(isAppServerConnectionClosedError(new Error('The app-server turn failed')), false);
 });
 
+test('isAppServerThreadNotFoundError only matches missing-thread responses', () => {
+  assert.equal(isAppServerThreadNotFoundError(new Error('thread not found: thr_123')), true);
+  assert.equal(isAppServerThreadNotFoundError(new Error('invalid thread id: expected uuid')), true);
+  assert.equal(isAppServerThreadNotFoundError(new Error('thread not loaded: 8e67cd9d-ed8c-424e-ade9-a9a68c388069')), true);
+  assert.equal(isAppServerThreadNotFoundError(new Error('Unable to connect to app-server at ws://localhost:4222')), false);
+});
+
 test('isAppServerTurnWaitTimeoutError only matches turn wait timeouts', () => {
   assert.equal(isAppServerTurnWaitTimeoutError(new Error('Timed out waiting for the app-server to finish the turn')), true);
   assert.equal(isAppServerTurnWaitTimeoutError(new Error('App-server connection closed: ws://localhost:4222')), false);
@@ -686,6 +694,47 @@ test('interruptTurn reconciles an already-idle thread and surfaces the recovered
   assert.ok(events.some((event) => event.type === 'thread'));
   assert.ok(
     events.some((event) => event.type === 'error' && event.message === 'The backend command timed out.'),
+  );
+});
+
+test('getChat downgrades cached running threads when the backend no longer has them', async () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  const events: Array<Record<string, unknown>> = [];
+
+  (client as any).emit = (event: Record<string, unknown>) => {
+    events.push(event);
+  };
+  (client as any).threadCache.set('chat-missing', {
+    activity: [],
+    cwd: '/workspace/project',
+    id: 'chat-missing',
+    messages: [],
+    preview: 'Still running locally',
+    status: 'running',
+    title: 'Missing thread',
+    tokenUsageLabel: null,
+    updatedAt: '2026-03-20T00:00:00.000Z',
+  });
+  (client as any).summaryCache.set('chat-missing', {
+    cwd: '/workspace/project',
+    id: 'chat-missing',
+    preview: 'Still running locally',
+    status: 'running',
+    title: 'Missing thread',
+    updatedAt: '2026-03-20T00:00:00.000Z',
+  });
+  (client as any).readRawThread = async () => {
+    throw new Error('thread not found: chat-missing');
+  };
+
+  const thread = await client.getChat('chat-missing');
+
+  assert.equal(thread.status, 'idle');
+  assert.equal((client as any).runningTurnIds.has('chat-missing'), false);
+  assert.ok(
+    events.some(
+      (event) => event.type === 'thread' && ((event.thread as { status?: string } | undefined)?.status ?? null) === 'idle',
+    ),
   );
 });
 
