@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
+import { liveActivityHeadline } from '../app/liveActivityPresentation';
 import { renderMessageMarkdown } from '../app/messageMarkdown';
 import { positionMessageMenu } from '../app/messageMenuPosition';
 import type { ActivityEntry, ChatThread, ModelOption, ReasoningEffort } from '../app/types';
@@ -543,13 +544,6 @@ export const ConversationView = ({
           <div className="message-empty">Open a chat from the drawer or create a fresh tab to continue.</div>
         ) : null}
 
-        {busy ? (
-          <div className="run-row">
-            <Icon name="loader" size={14} spin />
-            <span>Agent running • {chat?.title ?? 'active session'}</span>
-          </div>
-        ) : null}
-
         {chat?.messages.filter((message) => message.role !== 'system').map((message, index, messages) => {
           const isLastAssistant = message.role === 'assistant' && index === messages.length - 1;
           const isEnteringUserMessage = message.role === 'user' && message.id.startsWith('optimistic-');
@@ -558,57 +552,24 @@ export const ConversationView = ({
           const isIntermediateMessage = message.role === 'assistant' && chat.activity.some((entry) => entry.id === message.id);
           const showInlineStack = message.role === 'assistant' && !isIntermediateMessage && stackEntries.length > 0;
           const inlineStackExpanded = expandedStackMessageId === message.id;
-          const topStackEntry = stackEntries[0] ?? null;
 
           return (
             <div key={message.id} className="message-block">
-              {showInlineStack && topStackEntry ? (
-                <div className="message-inline-stack">
-                  <button
-                    className={`message-stack__summary ${inlineStackExpanded ? 'message-stack__summary--expanded' : ''}`}
-                    type="button"
-                    onClick={() => setExpandedStackMessageId((current) => (current === message.id ? null : message.id))}
-                  >
-                    <div className="message-stack__summary-header">
-                      <span className="message-stack__title">Agent activity</span>
-                      <span className="message-stack__count">
-                        {inlineStackExpanded ? 'Hide stack' : `${stackEntries.length} saved`}
-                      </span>
-                    </div>
-                    <div className="message-stack__layers" aria-hidden="true">
-                      <span />
-                      <span />
-                    </div>
-                    <article className="message-sheet__detail-card message-sheet__detail-card--stack">
+              {showInlineStack && inlineStackExpanded ? (
+                <div className="message-inline-stack__items">
+                  {stackEntries.map((entry) => (
+                    <article key={entry.id} className="message-sheet__detail-card">
                       <div className="message-sheet__detail-header">
-                        <span className="message-sheet__detail-title">{topStackEntry.title}</span>
-                        <span className={`message-sheet__detail-status message-sheet__detail-status--${topStackEntry.status}`}>
-                          {topStackEntry.status.replace('-', ' ')}
+                        <span className="message-sheet__detail-title">{liveActivityHeadline(entry)}</span>
+                        <span className={`message-sheet__detail-status message-sheet__detail-status--${entry.status}`}>
+                          {entry.status.replace('-', ' ')}
                         </span>
                       </div>
-                      <div className="message-sheet__detail-kind">{topStackEntry.kind.replace('-', ' ')}</div>
-                      <p className="message-sheet__detail-summary">{topStackEntry.summary}</p>
-                      {topStackEntry.detail ? <pre className="message-sheet__detail-body">{topStackEntry.detail}</pre> : null}
+                      <div className="message-sheet__detail-kind">{entry.kind.replace('-', ' ')}</div>
+                      <p className="message-sheet__detail-summary">{entry.summary}</p>
+                      {entry.detail ? <pre className="message-sheet__detail-body">{entry.detail}</pre> : null}
                     </article>
-                  </button>
-
-                  {inlineStackExpanded ? (
-                    <div className="message-inline-stack__items">
-                      {stackEntries.slice(1).map((entry) => (
-                        <article key={entry.id} className="message-sheet__detail-card">
-                          <div className="message-sheet__detail-header">
-                            <span className="message-sheet__detail-title">{entry.title}</span>
-                            <span className={`message-sheet__detail-status message-sheet__detail-status--${entry.status}`}>
-                              {entry.status.replace('-', ' ')}
-                            </span>
-                          </div>
-                          <div className="message-sheet__detail-kind">{entry.kind.replace('-', ' ')}</div>
-                          <p className="message-sheet__detail-summary">{entry.summary}</p>
-                          {entry.detail ? <pre className="message-sheet__detail-body">{entry.detail}</pre> : null}
-                        </article>
-                      ))}
-                    </div>
-                  ) : null}
+                  ))}
                 </div>
               ) : null}
 
@@ -621,7 +582,9 @@ export const ConversationView = ({
                   isEnteringUserMessage ? 'message-card--enter' : ''
                 } ${selectionMessageId === message.id ? 'message-card--selecting' : ''} ${
                   spotlightMessageId === message.id ? 'message-card--spotlight' : ''
-                } ${isIntermediateMessage ? 'message-card--progress' : ''}`}
+                } ${isIntermediateMessage ? 'message-card--progress' : ''} ${
+                  showInlineStack && !inlineStackExpanded ? 'message-card--with-stack' : ''
+                }`}
                 onContextMenu={(event) => {
                   const suppressed = suppressContextMenuRef.current;
                   if (suppressed && suppressed.messageId === message.id && suppressed.expiresAt > Date.now()) {
@@ -647,6 +610,18 @@ export const ConversationView = ({
                 }}
                 aria-label={`${messageLabel(message.role)} message`}
               >
+                {showInlineStack ? (
+                  <button
+                    className="message-card__stack-toggle"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setExpandedStackMessageId((current) => (current === message.id ? null : message.id));
+                    }}
+                  >
+                    {inlineStackExpanded ? 'Hide stack' : 'Expand stack'}
+                  </button>
+                ) : null}
                 <div
                   ref={(node) => {
                     messageBodyNodesRef.current[message.id] = node;
@@ -667,7 +642,7 @@ export const ConversationView = ({
           );
         })}
 
-        {busy && liveActivity.length > 0 ? <LiveActivityStack entries={liveActivity} searchQuery={searchQuery} /> : null}
+        {busy ? <LiveActivityStack busy={busy} entries={liveActivity} searchQuery={searchQuery} /> : null}
 
         <div ref={bottomRef} />
       </div>

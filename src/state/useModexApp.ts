@@ -22,9 +22,11 @@ import {
   mergeBootstrapThread,
   mergeThreadSummary,
   replaceOrAppendMessage,
+  sanitizeBootstrapThread,
   setTabStatusIfOpen,
   setTabUnreadIfOpen,
   setThreadTokenUsage,
+  shouldHoldIdleStatusUntilThreadSync,
   summarizeThread,
   upsertLiveActivity,
   updateChatSummary,
@@ -53,24 +55,31 @@ const bootstrapWorkspace = () => {
     return null;
   }
 
-  const cachedStatusByChatId = new Map(workspace.cachedChats.map((chat) => [chat.id, chat.status] satisfies [string, ChatSummary['status']]));
+  const cachedThreadsByChatId = Object.fromEntries(
+    Object.entries(workspace.cachedThreadsByChatId).map(([chatId, thread]) => [chatId, sanitizeBootstrapThread(thread)] satisfies [string, ChatThread]),
+  );
+  const cachedChats = workspace.cachedChats.map((chat) => ({
+    ...chat,
+    status: cachedThreadsByChatId[chat.id]?.status ?? chat.status,
+  }));
+  const cachedStatusByChatId = new Map(cachedChats.map((chat) => [chat.id, chat.status] satisfies [string, ChatSummary['status']]));
   const openTabs = workspace.openChatIds.map((chatId) => ({
     chatId,
     hasUnreadCompletion: false,
-    status: workspace.cachedThreadsByChatId[chatId]?.status ?? cachedStatusByChatId.get(chatId) ?? 'idle',
+    status: cachedThreadsByChatId[chatId]?.status ?? cachedStatusByChatId.get(chatId) ?? 'idle',
   }));
 
   return {
-    activeChatId: workspace.activeChatId ?? openTabs[0]?.chatId ?? workspace.cachedChats[0]?.id ?? null,
+    activeChatId: workspace.activeChatId ?? openTabs[0]?.chatId ?? cachedChats[0]?.id ?? null,
     attachmentsByChatId: {},
-    chatMap: workspace.cachedThreadsByChatId,
+    chatMap: cachedThreadsByChatId,
     chatSettingsByChatId: workspace.chatSettingsByChatId,
-    chats: workspace.cachedChats,
+    chats: cachedChats,
     draftsByChatId: workspace.draftsByChatId,
     error: null,
     interactionByChatId: {},
     liveActivityByChatId: Object.fromEntries(
-      Object.entries(workspace.cachedThreadsByChatId).flatMap(([chatId, thread]) => {
+      Object.entries(cachedThreadsByChatId).flatMap(([chatId, thread]) => {
         const liveActivity = deriveLiveActivity(thread);
         return liveActivity.length > 0 ? [[chatId, liveActivity] satisfies [string, ActivityEntry[]]] : [];
       }),
@@ -238,11 +247,17 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
       return applyThread(current, event.thread);
 
     case 'status': {
+      const holdIdleStatus = shouldHoldIdleStatusUntilThreadSync(
+        current.chatMap[event.chatId],
+        current.liveActivityByChatId[event.chatId],
+        event.status,
+      );
+      const effectiveStatus = holdIdleStatus ? 'running' : event.status;
       const chats = current.chats.map((chat) =>
         chat.id === event.chatId
           ? {
               ...chat,
-              status: event.status,
+              status: effectiveStatus,
             }
           : chat,
       );
@@ -254,21 +269,21 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
           ? {
               ...current.chatMap,
               [event.chatId]: withThreadMetadata(current.chatMap[event.chatId], {
-                status: event.status,
+                status: effectiveStatus,
               }),
             }
           : current.chatMap,
         interactionByChatId:
-          event.status === 'idle'
+          effectiveStatus === 'idle'
             ? clearInteractionForChat(current.interactionByChatId, event.chatId)
             : current.interactionByChatId,
         liveActivityByChatId:
-          event.status === 'idle'
+          effectiveStatus === 'idle'
             ? clearLiveActivityForChat(current.liveActivityByChatId, event.chatId)
             : current.liveActivityByChatId,
-        openTabs: shouldMarkUnreadCompletion(current, event.chatId, event.status)
-          ? setTabUnreadIfOpen(setTabStatusIfOpen(current.openTabs, event.chatId, event.status), event.chatId, true)
-          : setTabStatusIfOpen(current.openTabs, event.chatId, event.status),
+        openTabs: shouldMarkUnreadCompletion(current, event.chatId, effectiveStatus)
+          ? setTabUnreadIfOpen(setTabStatusIfOpen(current.openTabs, event.chatId, effectiveStatus), event.chatId, true)
+          : setTabStatusIfOpen(current.openTabs, event.chatId, effectiveStatus),
       };
     }
 

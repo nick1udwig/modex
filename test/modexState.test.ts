@@ -10,8 +10,10 @@ import {
   mergeLiveActivity,
   mergeBootstrapThread,
   mergeThreadSummary,
+  sanitizeBootstrapThread,
   setTabStatusIfOpen,
   setTabUnreadIfOpen,
+  shouldHoldIdleStatusUntilThreadSync,
   upsertLiveActivity,
   updateChatSummary,
 } from '../src/state/modexState.ts';
@@ -396,5 +398,92 @@ test('downgradeMissingThread clears stale running state when the backend no long
       tokenUsageLabel: null,
       updatedAt: '2026-03-20T00:00:00.000Z',
     },
+  );
+});
+
+test('sanitizeBootstrapThread clears cached running state that has no live evidence', () => {
+  assert.deepEqual(
+    sanitizeBootstrapThread({
+      activity: [],
+      cwd: '/workspace/modex',
+      id: 'chat-bootstrap',
+      messages: [
+        {
+          content: 'Earlier final reply',
+          createdAt: '2026-03-20T00:00:00.000Z',
+          id: 'msg-1',
+          role: 'assistant',
+          turnId: 'turn-1',
+        },
+      ],
+      preview: 'Earlier final reply',
+      status: 'running',
+      title: 'Cached chat',
+      tokenUsageLabel: null,
+      updatedAt: '2026-03-20T00:00:00.000Z',
+    }),
+    {
+      activity: [],
+      cwd: '/workspace/modex',
+      id: 'chat-bootstrap',
+      messages: [
+        {
+          content: 'Earlier final reply',
+          createdAt: '2026-03-20T00:00:00.000Z',
+          id: 'msg-1',
+          role: 'assistant',
+          turnId: 'turn-1',
+        },
+      ],
+      preview: 'Earlier final reply',
+      status: 'idle',
+      title: 'Cached chat',
+      tokenUsageLabel: null,
+      updatedAt: '2026-03-20T00:00:00.000Z',
+    },
+  );
+});
+
+test('shouldHoldIdleStatusUntilThreadSync keeps live stacks visible until the final thread arrives', () => {
+  assert.equal(
+    shouldHoldIdleStatusUntilThreadSync(
+      {
+        messages: [
+          {
+            content: 'Question',
+            createdAt: '2026-03-20T00:00:00.000Z',
+            id: 'msg-1',
+            role: 'user',
+            turnId: 'turn-1',
+          },
+        ],
+        status: 'running',
+      },
+      [
+        {
+          detail: 'Inspecting files',
+          id: 'entry-1',
+          kind: 'commentary',
+          status: 'in-progress',
+          summary: 'Inspecting files',
+          title: 'Thinking',
+          turnId: 'turn-2',
+        },
+      ],
+      'idle',
+    ),
+    true,
+  );
+
+  assert.equal(
+    shouldHoldIdleStatusUntilThreadSync(
+      {
+        messages: [],
+        status: 'running',
+      },
+      [],
+      'idle',
+    ),
+    false,
   );
 });

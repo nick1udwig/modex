@@ -1,4 +1,4 @@
-import type { ActivityEntry, ActivityStatus, ChatSummary, ChatTab, ChatThread, Message } from '../app/types';
+import type { ActivityEntry, ActivityStatus, ChatStatus, ChatSummary, ChatTab, ChatThread, Message } from '../app/types';
 
 export const mergeThreadSummary = (thread: ChatThread, summary: ChatSummary): ChatThread => ({
   ...thread,
@@ -66,6 +66,24 @@ export const downgradeMissingThread = (thread: ChatThread): ChatThread => ({
   ...thread,
   status: 'idle',
 });
+
+export const sanitizeBootstrapThread = (thread: ChatThread): ChatThread => {
+  if (thread.status !== 'running') {
+    return thread;
+  }
+
+  if (deriveLiveActivity(thread).length > 0 || hasTransientLocalMessages(thread)) {
+    return thread;
+  }
+
+  return downgradeMissingThread(thread);
+};
+
+export const shouldHoldIdleStatusUntilThreadSync = (
+  thread: Pick<ChatThread, 'messages' | 'status'> | undefined,
+  liveActivity: ActivityEntry[] | undefined,
+  nextStatus: ChatStatus,
+) => nextStatus === 'idle' && Boolean(thread && thread.status === 'running' && (liveActivity?.length ?? 0) > 0);
 
 export const upsertLiveActivity = (entries: ActivityEntry[], incoming: ActivityEntry) => {
   const index = entries.findIndex((entry) => entry.id === incoming.id);

@@ -4,14 +4,30 @@ import { isToolActivity, liveActivityHeadline, liveActivityPreview } from '../ap
 import type { ActivityEntry } from '../app/types';
 
 interface LiveActivityStackProps {
+  busy: boolean;
   entries: ActivityEntry[];
   searchQuery: string;
 }
 
-export const LiveActivityStack = ({ entries, searchQuery }: LiveActivityStackProps) => {
+const PLACEHOLDER_ENTRY: ActivityEntry = {
+  detail: 'Waiting for agent updates...',
+  id: 'live-placeholder',
+  kind: 'commentary',
+  status: 'in-progress',
+  summary: 'Waiting for agent updates...',
+  title: 'Thinking',
+  turnId: 'live-placeholder',
+};
+
+export const LiveActivityStack = ({ busy, entries, searchQuery }: LiveActivityStackProps) => {
   const [expanded, setExpanded] = useState(false);
-  const stackEntries = useMemo(() => [...entries].reverse(), [entries]);
+  const stackEntries = useMemo(
+    () => [...(entries.length > 0 ? entries : busy ? [PLACEHOLDER_ENTRY] : [])].reverse(),
+    [busy, entries],
+  );
   const topEntry = stackEntries[0] ?? null;
+  const layeredEntries = stackEntries.slice(1, 3);
+  const canExpand = entries.length > 0;
 
   if (!topEntry) {
     return null;
@@ -24,27 +40,35 @@ export const LiveActivityStack = ({ entries, searchQuery }: LiveActivityStackPro
       </div>
 
       <div className={`message-live-stack__summary ${expanded ? 'message-live-stack__summary--expanded' : ''}`}>
-        {!expanded && stackEntries.length > 1 ? (
+        {!expanded && layeredEntries.length > 0 ? (
           <div className="message-live-stack__layers" aria-hidden="true">
-            <span />
-            <span />
+            {layeredEntries.map((entry, index) => (
+              <article key={entry.id} className={`message-live-card message-live-card--layer message-live-card--layer-${index + 1}`}>
+                <div className="message-live-card__header">
+                  <span className="message-live-card__title">{liveActivityHeadline(entry)}</span>
+                </div>
+                <p className="message-live-card__preview">{liveActivityPreview(entry, 20)}</p>
+              </article>
+            ))}
           </div>
         ) : null}
 
         <article key={topEntry.id} className="message-live-card message-live-card--top">
           <div className="message-live-card__header">
             <span className="message-live-card__title">{liveActivityHeadline(topEntry)}</span>
-            <button
-              className="message-live-card__toggle"
-              type="button"
-              onClick={() => setExpanded((current) => !current)}
-            >
-              {expanded ? 'Hide stack' : 'Expand stack'}
-            </button>
+            {canExpand ? (
+              <button
+                className="message-live-card__toggle"
+                type="button"
+                onClick={() => setExpanded((current) => !current)}
+              >
+                {expanded ? 'Hide stack' : 'Expand stack'}
+              </button>
+            ) : null}
           </div>
 
           {isToolActivity(topEntry) ? (
-            <p className="message-live-card__preview">{liveActivityPreview(topEntry, 36)}</p>
+            <p className="message-live-card__preview">{liveActivityPreview(topEntry, 20)}</p>
           ) : (
             <div className="message-live-card__body message-markdown">
               {renderMessageMarkdown(topEntry.detail, {
@@ -56,7 +80,7 @@ export const LiveActivityStack = ({ entries, searchQuery }: LiveActivityStackPro
         </article>
       </div>
 
-      {expanded ? (
+      {expanded && stackEntries.length > 1 ? (
         <div className="message-live-stack__items">
           {stackEntries.slice(1).map((entry) => (
             <article key={entry.id} className="message-live-card">

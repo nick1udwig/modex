@@ -357,16 +357,6 @@ textarea:disabled {
   gap: 8px;
 }
 
-.run-row {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-family: var(--font-display);
-  font-size: 11px;
-}
-
 .message-notice {
   flex: 0 0 auto;
   padding: 8px 10px;
@@ -379,6 +369,7 @@ textarea:disabled {
 
 .message-card {
   flex: 0 0 auto;
+  position: relative;
   width: 100%;
   max-width: 100%;
   border-radius: 12px;
@@ -407,6 +398,31 @@ textarea:disabled {
     0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
+.message-card--with-stack {
+  overflow: visible;
+}
+
+.message-card--with-stack::before,
+.message-card--with-stack::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.03);
+  pointer-events: none;
+}
+
+.message-card--with-stack::before {
+  transform: translateY(-6px) scale(0.992);
+  opacity: 0.8;
+}
+
+.message-card--with-stack::after {
+  transform: translateY(-12px) scale(0.984);
+  opacity: 0.55;
+}
+
 .message-card--assistant,
 .message-card--system {
   align-self: stretch;
@@ -429,6 +445,16 @@ textarea:disabled {
   -webkit-user-select: none;
 }
 
+.message-card--with-stack .message-card__body {
+  position: relative;
+  z-index: 1;
+}
+
+.message-card--assistant.message-card--with-stack .message-card__body {
+  padding-top: 18px;
+  padding-right: 98px;
+}
+
 .message-card__body--selectable {
   user-select: text;
   -webkit-user-select: text;
@@ -444,6 +470,24 @@ textarea:disabled {
   color: var(--muted);
   font-family: var(--font-display);
   font-size: 10px;
+  position: relative;
+  z-index: 1;
+}
+
+.message-card__stack-toggle {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 2;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--primary);
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .message-card--user .message-card__meta {
@@ -684,28 +728,28 @@ textarea:disabled {
 
 .message-live-stack__summary {
   position: relative;
+  padding-top: 18px;
 }
 
 .message-live-stack__layers {
   position: absolute;
-  inset: 0;
+  inset: 18px 0 auto;
   pointer-events: none;
 }
 
-.message-live-stack__layers span {
+.message-live-card--layer {
   position: absolute;
   inset: 0;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  max-height: 92px;
 }
 
-.message-live-stack__layers span:first-child {
+.message-live-card--layer-1 {
   transform: translateY(7px) scale(0.988);
   opacity: 0.82;
 }
 
-.message-live-stack__layers span:last-child {
+.message-live-card--layer-2 {
   transform: translateY(13px) scale(0.976);
   opacity: 0.56;
 }
@@ -795,7 +839,7 @@ textarea:disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 8px;
+  margin: 0 0 8px 12px;
 }
 
 .message-stack__summary {
