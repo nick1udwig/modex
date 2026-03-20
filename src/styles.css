@@ -442,6 +442,7 @@ textarea:disabled {
   line-height: 1.35;
   overflow-wrap: anywhere;
   user-select: none;
+  -webkit-touch-callout: none;
   -webkit-user-select: none;
 }
 
@@ -457,6 +458,7 @@ textarea:disabled {
 
 .message-card__body--selectable {
   user-select: text;
+  -webkit-touch-callout: default;
   -webkit-user-select: text;
 }
 

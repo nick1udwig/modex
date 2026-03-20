@@ -115,23 +115,17 @@ export const ConversationView = ({
   selectedReasoningEffort,
 }: ConversationViewProps) => {
   const bottomRef = useRef<HTMLDivElement | null>(null);
-  const messageBodyNodesRef = useRef<Record<string, HTMLDivElement | null>>({});
   const messageMenuRef = useRef<HTMLDivElement | null>(null);
   const messageNodesRef = useRef<Record<string, HTMLDivElement | null>>({});
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const longPressRef = useRef<{
     messageId: string;
-    mode: 'menu' | 'selection';
     pointerId: number;
     startX: number;
     startY: number;
     timeoutId: number;
     triggered: boolean;
-  } | null>(null);
-  const suppressContextMenuRef = useRef<{
-    expiresAt: number;
-    messageId: string;
   } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [detailsMessageId, setDetailsMessageId] = useState<string | null>(null);
@@ -285,6 +279,7 @@ export const ConversationView = ({
     const handleReposition = () => {
       setMessageMenu(null);
       setDetailsMessageId(null);
+      setSelectionMessageId(null);
     };
 
     const listNode = messageListRef.current;
@@ -344,7 +339,6 @@ export const ConversationView = ({
     const node = messageNodesRef.current[messageId];
     const rect = node?.getBoundingClientRect();
     clearNativeSelection();
-    setSelectionMessageId(null);
     setDetailsMessageId(null);
     if (!rect) {
       return;
@@ -367,37 +361,7 @@ export const ConversationView = ({
       menuTop: position.top,
       messageId,
     });
-  };
-
-  const enableMessageSelection = (messageId: string, options?: { preserveMenu?: boolean }) => {
-    const bodyNode = messageBodyNodesRef.current[messageId];
-    clearNativeSelection();
-    if (!options?.preserveMenu) {
-      setMessageMenu(null);
-    }
-    setDetailsMessageId(null);
     setSelectionMessageId(messageId);
-    setNotice('Text selection enabled');
-    suppressContextMenuRef.current = {
-      expiresAt: Date.now() + 900,
-      messageId,
-    };
-
-    if (!bodyNode) {
-      return;
-    }
-
-    window.requestAnimationFrame(() => {
-      const selection = window.getSelection();
-      if (!selection) {
-        return;
-      }
-
-      const range = document.createRange();
-      range.selectNodeContents(bodyNode);
-      selection.removeAllRanges();
-      selection.addRange(range);
-    });
   };
 
   const handleMessagePointerDown = (event: PointerEvent<HTMLDivElement>, messageId: string) => {
@@ -410,13 +374,9 @@ export const ConversationView = ({
       return;
     }
 
-    const longPressMode: 'menu' | 'selection' =
-      messageMenu?.messageId === messageId && target.closest('.message-card__body') ? 'selection' : 'menu';
-
     cancelLongPress();
     longPressRef.current = {
       messageId,
-      mode: longPressMode,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
@@ -426,11 +386,6 @@ export const ConversationView = ({
         }
 
         longPressRef.current.triggered = true;
-        if (longPressRef.current.mode === 'selection') {
-          enableMessageSelection(messageId, { preserveMenu: true });
-          return;
-        }
-
         openMessageActions(messageId);
       }, LONG_PRESS_MS),
       triggered: false,
@@ -587,9 +542,12 @@ export const ConversationView = ({
                   showInlineStack && !inlineStackExpanded ? 'message-card--with-stack' : ''
                 }`}
                 onContextMenu={(event) => {
-                  const suppressed = suppressContextMenuRef.current;
-                  if (suppressed && suppressed.messageId === message.id && suppressed.expiresAt > Date.now()) {
-                    event.preventDefault();
+                  const target = event.target;
+                  if (
+                    selectionMessageId === message.id &&
+                    target instanceof Element &&
+                    target.closest('.message-card__body')
+                  ) {
                     return;
                   }
 
@@ -624,9 +582,6 @@ export const ConversationView = ({
                   </button>
                 ) : null}
                 <div
-                  ref={(node) => {
-                    messageBodyNodesRef.current[message.id] = node;
-                  }}
                   className={`message-card__body message-markdown ${
                     selectionMessageId === message.id ? 'message-card__body--selectable' : ''
                   }`}
@@ -657,6 +612,8 @@ export const ConversationView = ({
             onClick={() => {
               setMessageMenu(null);
               setDetailsMessageId(null);
+              setSelectionMessageId(null);
+              clearNativeSelection();
             }}
           />
 
@@ -675,7 +632,11 @@ export const ConversationView = ({
                 void copyTextToClipboard(selectedMessage.content)
                   .then(() => setNotice('Message copied'))
                   .catch(() => setNotice('Copy failed'))
-                  .finally(() => setMessageMenu(null));
+                  .finally(() => {
+                    setMessageMenu(null);
+                    setSelectionMessageId(null);
+                    clearNativeSelection();
+                  });
               }}
             >
               Copy
@@ -688,6 +649,8 @@ export const ConversationView = ({
                 setDetailsMessageId(selectedMessage.id);
                 setDetailsStackExpanded(false);
                 setMessageMenu(null);
+                setSelectionMessageId(null);
+                clearNativeSelection();
               }}
             >
               Activity
