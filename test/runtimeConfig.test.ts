@@ -3,7 +3,7 @@ import test from 'node:test';
 import { buildDefaultWebSocketUrl, readRuntimeOverride } from '../src/services/runtimeConfig.ts';
 
 const withWindow = async (
-  location: { hostname: string; protocol: string; search?: string },
+  location: { hostname: string; port?: string; protocol: string; search?: string },
   run: () => void | Promise<void>,
 ) => {
   const originalWindow = (globalThis as { window?: typeof window }).window;
@@ -20,6 +20,7 @@ const withWindow = async (
   (globalThis as { window?: unknown }).window = {
     location: {
       hostname: location.hostname,
+      port: location.port ?? '',
       protocol: location.protocol,
       search: location.search ?? '',
     },
@@ -49,6 +50,12 @@ test('buildDefaultWebSocketUrl supports same-origin path defaults', async () => 
       buildDefaultWebSocketUrl({ path: '/sidecar' }),
       'wss://levi.taila510b.ts.net/sidecar',
     );
+  });
+});
+
+test('buildDefaultWebSocketUrl preserves the current browser port for same-origin paths', async () => {
+  await withWindow({ hostname: '127.0.0.1', port: '4173', protocol: 'http:' }, () => {
+    assert.equal(buildDefaultWebSocketUrl({ path: '/sidecar' }), 'ws://127.0.0.1:4173/sidecar');
   });
 });
 

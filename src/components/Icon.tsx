@@ -5,7 +5,10 @@ export type IconName =
   | 'arrow-down'
   | 'arrow-up'
   | 'battery-full'
+  | 'chevron-down'
   | 'ellipsis'
+  | 'folder'
+  | 'folder-open'
   | 'loader'
   | 'menu'
   | 'mic'
@@ -81,11 +84,30 @@ export const Icon = ({ name, size = 18, spin = false, style, ...props }: IconPro
           <path d="m7 12 5 5 5-5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
+    case 'chevron-down':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={mergedStyle} {...props}>
+          <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
     case 'search':
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={mergedStyle} {...props}>
           <circle cx="11" cy="11" r="6" />
           <path d="m16 16 4 4" strokeLinecap="round" />
+        </svg>
+      );
+    case 'folder':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={mergedStyle} {...props}>
+          <path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v6.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'folder-open':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={mergedStyle} {...props}>
+          <path d="M3.5 8.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v1" strokeLinejoin="round" />
+          <path d="M4.5 11.5h15.5l-1.6 5.8a2 2 0 0 1-1.93 1.47H6.27a2 2 0 0 1-1.94-1.49z" strokeLinejoin="round" />
         </svg>
       );
     case 'ellipsis':

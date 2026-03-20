@@ -38,13 +38,14 @@ export const buildDefaultWebSocketUrl = (
   const options = typeof target === 'number' ? { port: target } : target;
   const location = browserLocation();
   const hostname = location?.hostname?.trim() || fallbackHost;
+  const currentPort = location?.port?.trim() || '';
   const protocol = location?.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = new URL('ws://127.0.0.1');
   const path = options.path?.trim() || '';
 
   url.protocol = protocol;
   url.hostname = hostname;
-  url.port = options.port === undefined ? '' : String(options.port);
+  url.port = options.port === undefined ? currentPort : String(options.port);
   url.pathname = path ? (path.startsWith('/') ? path : `/${path}`) : '';
   url.search = '';
   url.hash = '';
