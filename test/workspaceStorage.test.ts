@@ -17,15 +17,20 @@ test('sanitizeWorkspaceSnapshot preserves recoverable local chats while restorin
   );
 
   assert.deepEqual(snapshot, {
-    activeChatId: 'chat-b',
+    activeTabId: 'chat:chat-b',
     cachedChats: [],
+    cachedTerminalSessionsById: {},
     cachedThreadsByChatId: {},
     chatSettingsByChatId: {},
-    openChatIds: ['chat-a', 'chat-b', 'missing'],
     draftsByChatId: {
       'chat-a': 'draft a',
       missing: 'ignore me',
     },
+    openTabs: [
+      { chatId: 'chat-a', hasUnreadCompletion: false, id: 'chat:chat-a', kind: 'chat', status: 'idle' },
+      { chatId: 'chat-b', hasUnreadCompletion: false, id: 'chat:chat-b', kind: 'chat', status: 'idle' },
+      { chatId: 'missing', hasUnreadCompletion: false, id: 'chat:missing', kind: 'chat', status: 'idle' },
+    ],
   });
 });
 
@@ -40,12 +45,16 @@ test('sanitizeWorkspaceSnapshot falls back to the first valid open tab when acti
   );
 
   assert.deepEqual(snapshot, {
-    activeChatId: 'chat-a',
+    activeTabId: 'chat:chat-a',
     cachedChats: [],
+    cachedTerminalSessionsById: {},
     cachedThreadsByChatId: {},
     chatSettingsByChatId: {},
-    openChatIds: ['chat-a', 'chat-b'],
     draftsByChatId: {},
+    openTabs: [
+      { chatId: 'chat-a', hasUnreadCompletion: false, id: 'chat:chat-a', kind: 'chat', status: 'idle' },
+      { chatId: 'chat-b', hasUnreadCompletion: false, id: 'chat:chat-b', kind: 'chat', status: 'idle' },
+    ],
   });
 });
 
@@ -154,6 +163,8 @@ test('sanitizeWorkspaceSnapshot restores cached chats and hydrated threads for i
   assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.messages[0]?.turnId, 'turn-1');
   assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.activity[0]?.id, 'activity-0');
   assert.equal(snapshot.cachedThreadsByChatId['chat-a']?.activity[0]?.kind, 'commentary');
+  assert.equal(snapshot.activeTabId, 'chat:chat-a');
+  assert.deepEqual(snapshot.openTabs, [{ chatId: 'chat-a', hasUnreadCompletion: false, id: 'chat:chat-a', kind: 'chat', status: 'idle' }]);
 });
 
 test('sanitizeWorkspaceSnapshot preserves the active cached chat when the server list omits a new empty thread', () => {
@@ -188,10 +199,66 @@ test('sanitizeWorkspaceSnapshot preserves the active cached chat when the server
     ['chat-existing'],
   );
 
-  assert.equal(snapshot.activeChatId, 'chat-new');
-  assert.deepEqual(snapshot.openChatIds, ['chat-new']);
+  assert.equal(snapshot.activeTabId, 'chat:chat-new');
+  assert.deepEqual(snapshot.openTabs, [{ chatId: 'chat-new', hasUnreadCompletion: false, id: 'chat:chat-new', kind: 'chat', status: 'idle' }]);
   assert.equal(snapshot.cachedChats[0]?.id, 'chat-new');
   assert.equal(snapshot.cachedThreadsByChatId['chat-new']?.id, 'chat-new');
+});
+
+test('sanitizeWorkspaceSnapshot restores cached terminal sessions alongside mixed open tabs', () => {
+  const snapshot = sanitizeWorkspaceSnapshot(
+    {
+      activeTabId: 'terminal:term-1',
+      cachedChats: [
+        {
+          cwd: '/workspace/chat',
+          id: 'chat-a',
+          preview: 'Cached chat',
+          status: 'idle',
+          title: 'Chat A',
+          updatedAt: '2026-03-20T08:00:00.000Z',
+        },
+      ],
+      cachedTerminalSessionsById: {
+        'term-1': {
+          createdAt: '2026-03-20T08:00:00.000Z',
+          currentName: 'shell',
+          cwd: '/workspace/term',
+          detachKey: 'C-b d',
+          exitCode: null,
+          idHash: 'term-1',
+          logPath: '/tmp/tmuy/term-1.log',
+          socketPath: '/tmp/tmuy/term-1.sock',
+          startedName: 'shell',
+          status: 'live',
+          updatedAt: '2026-03-20T08:05:00.000Z',
+        },
+      },
+      openTabs: [
+        {
+          chatId: 'chat-a',
+          hasUnreadCompletion: false,
+          id: 'chat:chat-a',
+          kind: 'chat',
+          status: 'idle',
+        },
+        {
+          id: 'terminal:term-1',
+          kind: 'terminal',
+          sessionId: 'term-1',
+          status: 'live',
+        },
+      ],
+    },
+    ['chat-a'],
+  );
+
+  assert.equal(snapshot.activeTabId, 'terminal:term-1');
+  assert.equal(snapshot.cachedTerminalSessionsById['term-1']?.cwd, '/workspace/term');
+  assert.deepEqual(snapshot.openTabs, [
+    { chatId: 'chat-a', hasUnreadCompletion: false, id: 'chat:chat-a', kind: 'chat', status: 'idle' },
+    { id: 'terminal:term-1', kind: 'terminal', sessionId: 'term-1', status: 'live' },
+  ]);
 });
 
 test('saveWorkspaceSnapshot compacts persisted thread history to avoid blowing past browser storage', () => {
@@ -212,7 +279,7 @@ test('saveWorkspaceSnapshot compacts persisted thread history to avoid blowing p
 
   try {
     saveWorkspaceSnapshot({
-      activeChatId: 'chat-a',
+      activeTabId: 'chat:chat-a',
       cachedChats: [
         {
           cwd: '/workspace/project',
@@ -260,10 +327,11 @@ test('saveWorkspaceSnapshot compacts persisted thread history to avoid blowing p
         },
       },
       draftsByChatId: {},
-      openChatIds: ['chat-a'],
+      cachedTerminalSessionsById: {},
+      openTabs: [{ chatId: 'chat-a', hasUnreadCompletion: false, id: 'chat:chat-a', kind: 'chat', status: 'idle' }],
     });
 
-    const stored = JSON.parse(captured.get('modex.workspace.v1') ?? '{}') as {
+    const stored = JSON.parse(captured.get('modex.workspace.v2') ?? '{}') as {
       cachedChats?: Array<{ preview?: string; title?: string }>;
       cachedThreadsByChatId?: Record<
         string,

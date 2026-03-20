@@ -1,5 +1,5 @@
 import { messageMarkdownToPlainText } from './messageMarkdown';
-import type { ChatSummary, ChatThread } from './types';
+import type { ChatThread } from './types';
 
 export interface MatchRange {
   end: number;
@@ -18,8 +18,14 @@ export interface ChatSearchResult {
 }
 
 export interface SummarySearchResult {
-  chatId: string;
+  id: string;
   hitCount: number;
+}
+
+export interface SummarySearchEntry {
+  id: string;
+  preview: string;
+  title: string;
 }
 
 const normalizeQuery = (query: string) => query.trim().toLocaleLowerCase();
@@ -86,10 +92,10 @@ export const searchThreadMessages = (thread: ChatThread | null, query: string): 
   };
 };
 
-export const searchSummaries = (chats: ChatSummary[], query: string): SummarySearchResult[] =>
-  chats.flatMap((chat) => {
-    const titleMatches = findMatchRanges(chat.title, query).length;
-    const previewMatches = findMatchRanges(chat.preview, query).length;
+export const searchSummaries = (entries: SummarySearchEntry[], query: string): SummarySearchResult[] =>
+  entries.flatMap((entry) => {
+    const titleMatches = findMatchRanges(entry.title, query).length;
+    const previewMatches = findMatchRanges(entry.preview, query).length;
     const hitCount = titleMatches + previewMatches;
 
     if (hitCount === 0) {
@@ -98,7 +104,7 @@ export const searchSummaries = (chats: ChatSummary[], query: string): SummarySea
 
     return [
       {
-        chatId: chat.id,
+        id: entry.id,
         hitCount,
       },
     ];

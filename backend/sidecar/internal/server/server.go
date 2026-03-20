@@ -11,6 +11,7 @@ import (
 
 	"modex/backend/sidecar/internal/config"
 	"modex/backend/sidecar/internal/filesystem"
+	"modex/backend/sidecar/internal/terminal"
 	"modex/backend/sidecar/internal/transcription"
 )
 
@@ -24,6 +25,7 @@ func New(cfg config.Config, logger *slog.Logger) (*http.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("transcription proxy: %w", err)
 	}
+	terminalService := terminal.New(cfg.Terminal)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -31,6 +33,7 @@ func New(cfg config.Config, logger *slog.Logger) (*http.Server, error) {
 			"authRequired":            cfg.AuthToken != "",
 			"filesystemRoots":         filesystemService.Roots(),
 			"ok":                      true,
+			"terminalConfigured":      cfg.Terminal.Binary != "",
 			"transcriptionConfigured": cfg.Transcription.APIKey != "",
 		})
 	})
@@ -39,13 +42,17 @@ func New(cfg config.Config, logger *slog.Logger) (*http.Server, error) {
 			"name":    "modex-sidecar",
 			"version": 1,
 			"ws": map[string]string{
-				"filesystem":    "/ws/filesystem",
-				"transcription": "/ws/transcription",
+				"terminal":       "/ws/terminal",
+				"terminalAttach": "/ws/terminal/attach",
+				"filesystem":     "/ws/filesystem",
+				"transcription":  "/ws/transcription",
 			},
 		})
 	})
 	guard := withGuards(logger, cfg.AllowedOrigins, cfg.AuthToken)
 	mux.Handle("/ws/filesystem", guard(filesystem.Handler(filesystemService, logger)))
+	mux.Handle("/ws/terminal", guard(terminal.ControlHandler(terminalService, logger)))
+	mux.Handle("/ws/terminal/attach", guard(terminal.AttachHandler(terminalService, logger)))
 	mux.Handle("/ws/transcription", guard(http.HandlerFunc(transcriptionProxy.Handler)))
 
 	return &http.Server{

@@ -5,36 +5,47 @@ import type {
   ChatRuntimeSettings,
   ChatStatus,
   ChatSummary,
+  ChatTab,
   ChatThread,
   Message,
   MessageRole,
+  TerminalSessionStatus,
+  TerminalSessionSummary,
+  WorkspaceTab,
 } from '../app/types';
+import { createChatTab, createTerminalTab, isChatTab, isTerminalTab } from '../app/tabs';
 
 interface WorkspaceSnapshot {
-  activeChatId: string | null;
+  activeTabId: string | null;
   cachedChats: ChatSummary[];
   cachedThreadsByChatId: Record<string, ChatThread>;
+  cachedTerminalSessionsById: Record<string, TerminalSessionSummary>;
   chatSettingsByChatId: Record<string, ChatRuntimeSettings>;
   draftsByChatId: Record<string, string>;
-  openChatIds: string[];
+  openTabs: WorkspaceTab[];
 }
 
 interface RawWorkspaceSnapshot {
+  activeTabId?: string | null;
   activeChatId?: string | null;
   cachedChats?: unknown;
   cachedThreadsByChatId?: Record<string, unknown>;
+  cachedTerminalSessionsById?: Record<string, unknown>;
   chatSettingsByChatId?: Record<string, unknown>;
   draftsByChatId?: Record<string, unknown>;
+  openTabs?: unknown[];
   openChatIds?: string[];
 }
 
-const STORAGE_KEY = 'modex.workspace.v1';
+const STORAGE_KEY = 'modex.workspace.v2';
+const LEGACY_STORAGE_KEY = 'modex.workspace.v1';
 const VALID_CHAT_STATUSES = new Set<ChatStatus>(['idle', 'running', 'waiting-approval', 'waiting-input']);
+const VALID_TERMINAL_STATUSES = new Set<TerminalSessionStatus>(['starting', 'live', 'exited', 'failed']);
 const VALID_MESSAGE_ROLES = new Set<MessageRole>(['assistant', 'system', 'user']);
 const VALID_ACTIVITY_KINDS = new Set<ActivityKind>(['command', 'commentary', 'file-change', 'plan', 'reasoning']);
 const VALID_ACTIVITY_STATUSES = new Set<ActivityStatus>(['completed', 'failed', 'in-progress']);
 const MAX_STORED_CHAT_SUMMARIES = 60;
-const MAX_STORED_THREADS = 6;
+const MAX_STORED_TABS = 8;
 const MAX_STORED_MESSAGES = 40;
 const MAX_STORED_ACTIVITY = 60;
 const MAX_STORED_TEXT_CHARS = 4_000;
@@ -100,6 +111,11 @@ const normalizeIsoDate = (value: unknown) => {
 
 const normalizeChatStatus = (value: unknown): ChatStatus | null =>
   typeof value === 'string' && VALID_CHAT_STATUSES.has(value as ChatStatus) ? (value as ChatStatus) : null;
+
+const normalizeTerminalStatus = (value: unknown): TerminalSessionStatus | null =>
+  typeof value === 'string' && VALID_TERMINAL_STATUSES.has(value as TerminalSessionStatus)
+    ? (value as TerminalSessionStatus)
+    : null;
 
 const normalizeMessageRole = (value: unknown): MessageRole | null =>
   typeof value === 'string' && VALID_MESSAGE_ROLES.has(value as MessageRole) ? (value as MessageRole) : null;
@@ -227,6 +243,79 @@ const sanitizeChatThread = (value: unknown): ChatThread | null => {
   };
 };
 
+const sanitizeTerminalSession = (value: unknown): TerminalSessionSummary | null => {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const session = value as Partial<TerminalSessionSummary>;
+  const idHash = typeof session.idHash === 'string' ? session.idHash.trim() : '';
+  const currentName = typeof session.currentName === 'string' ? session.currentName.trim() : '';
+  const startedName = typeof session.startedName === 'string' ? session.startedName.trim() : '';
+  const cwd = typeof session.cwd === 'string' ? session.cwd : '';
+  const status = normalizeTerminalStatus(session.status);
+  const createdAt = normalizeIsoDate(session.createdAt);
+  const updatedAt = normalizeIsoDate(session.updatedAt);
+
+  if (!idHash || !currentName || !startedName || !status || !createdAt || !updatedAt) {
+    return null;
+  }
+
+  return {
+    createdAt,
+    currentName,
+    cwd,
+    detachKey: typeof session.detachKey === 'string' ? session.detachKey : 'C-b d',
+    exitCode: typeof session.exitCode === 'number' ? session.exitCode : null,
+    idHash,
+    logPath: typeof session.logPath === 'string' ? session.logPath : '',
+    socketPath: typeof session.socketPath === 'string' ? session.socketPath : '',
+    startedName,
+    status,
+    updatedAt,
+  };
+};
+
+const sanitizeChatTab = (value: unknown): ChatTab | null => {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const tab = value as Partial<ChatTab>;
+  const chatId = typeof tab.chatId === 'string' ? tab.chatId.trim() : '';
+  const status = normalizeChatStatus(tab.status);
+  if (!chatId || !status) {
+    return null;
+  }
+
+  return createChatTab(chatId, status, {
+    hasUnreadCompletion: typeof tab.hasUnreadCompletion === 'boolean' ? tab.hasUnreadCompletion : false,
+  });
+};
+
+const sanitizeWorkspaceTab = (value: unknown): WorkspaceTab | null => {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const tab = value as Partial<WorkspaceTab>;
+  if (tab.kind === 'chat') {
+    return sanitizeChatTab(value);
+  }
+
+  if (tab.kind === 'terminal') {
+    const sessionId = 'sessionId' in tab && typeof tab.sessionId === 'string' ? tab.sessionId.trim() : '';
+    const status = normalizeTerminalStatus(tab.status);
+    if (!sessionId || !status) {
+      return null;
+    }
+
+    return createTerminalTab(sessionId, status);
+  }
+
+  return null;
+};
+
 const compactStoredSummary = (summary: ChatSummary): ChatSummary => ({
   ...summary,
   cwd: truncateStoredText(summary.cwd, MAX_STORED_CWD_CHARS),
@@ -254,33 +343,62 @@ const compactStoredThread = (thread: ChatThread): ChatThread => ({
     : null,
 });
 
+const compactStoredTerminalSession = (session: TerminalSessionSummary): TerminalSessionSummary => ({
+  ...session,
+  cwd: truncateStoredText(session.cwd, MAX_STORED_CWD_CHARS),
+  currentName: truncateStoredText(session.currentName, MAX_STORED_TITLE_CHARS),
+  startedName: truncateStoredText(session.startedName, MAX_STORED_TITLE_CHARS),
+});
+
 const compactWorkspaceSnapshotForStorage = ({
-  activeChatId,
+  activeTabId,
   cachedChats,
   cachedThreadsByChatId,
+  cachedTerminalSessionsById,
   chatSettingsByChatId,
   draftsByChatId,
-  openChatIds,
+  openTabs,
 }: WorkspaceSnapshot): WorkspaceSnapshot => {
-  const threadIds = dedupeIds([activeChatId ?? '', ...openChatIds].filter(isStoredChatId)).slice(0, MAX_STORED_THREADS);
+  const compactOpenTabs = openTabs.slice(0, MAX_STORED_TABS);
+  const activeChatId =
+    activeTabId && compactOpenTabs.some((tab) => tab.id === activeTabId && isChatTab(tab))
+      ? ((compactOpenTabs.find((tab) => tab.id === activeTabId) as ChatTab | undefined)?.chatId ?? null)
+      : null;
+  const threadIds = dedupeIds(
+    [
+      activeChatId ?? '',
+      ...compactOpenTabs.flatMap((tab) => (isChatTab(tab) ? [tab.chatId] : [])),
+    ].filter(isStoredChatId),
+  );
   const compactThreads = Object.fromEntries(
     threadIds.flatMap((chatId) => {
       const thread = cachedThreadsByChatId[chatId];
       return thread ? [[chatId, compactStoredThread(thread)] satisfies [string, ChatThread]] : [];
     }),
   ) as Record<string, ChatThread>;
+  const compactTerminalSessions = Object.fromEntries(
+    compactOpenTabs.flatMap((tab) => {
+      if (!isTerminalTab(tab)) {
+        return [];
+      }
+
+      const session = cachedTerminalSessionsById[tab.sessionId];
+      return session ? [[tab.sessionId, compactStoredTerminalSession(session)] satisfies [string, TerminalSessionSummary]] : [];
+    }),
+  ) as Record<string, TerminalSessionSummary>;
   const compactChats = dedupeAndSortSummaries([
     ...cachedChats.map(compactStoredSummary),
     ...Object.values(compactThreads).map(summarizeCachedThread).map(compactStoredSummary),
   ]).slice(0, MAX_STORED_CHAT_SUMMARIES);
 
   return {
-    activeChatId,
+    activeTabId,
     cachedChats: compactChats,
     cachedThreadsByChatId: compactThreads,
+    cachedTerminalSessionsById: compactTerminalSessions,
     chatSettingsByChatId,
     draftsByChatId,
-    openChatIds,
+    openTabs: compactOpenTabs,
   };
 };
 
@@ -304,9 +422,20 @@ const deriveValidChatIds = (snapshot: RawWorkspaceSnapshot) => {
     ids.add(snapshot.activeChatId);
   }
 
+  if (typeof snapshot.activeTabId === 'string' && snapshot.activeTabId.startsWith('chat:')) {
+    ids.add(snapshot.activeTabId.slice('chat:'.length));
+  }
+
   (snapshot.openChatIds ?? []).forEach((chatId) => {
     if (typeof chatId === 'string' && chatId.trim().length > 0) {
       ids.add(chatId);
+    }
+  });
+
+  (snapshot.openTabs ?? []).forEach((tab) => {
+    const parsed = sanitizeWorkspaceTab(tab);
+    if (parsed && isChatTab(parsed)) {
+      ids.add(parsed.chatId);
     }
   });
 
@@ -359,9 +488,23 @@ const deriveRecoverableChatIds = (snapshot: RawWorkspaceSnapshot) => {
     ids.add(snapshot.activeChatId);
   }
 
+  if (typeof snapshot.activeTabId === 'string' && snapshot.activeTabId.startsWith('chat:')) {
+    const activeChatId = snapshot.activeTabId.slice('chat:'.length);
+    if (hasLocalState(activeChatId)) {
+      ids.add(activeChatId);
+    }
+  }
+
   (snapshot.openChatIds ?? []).forEach((chatId) => {
     if (isStoredChatId(chatId) && hasLocalState(chatId)) {
       ids.add(chatId);
+    }
+  });
+
+  (snapshot.openTabs ?? []).forEach((tab) => {
+    const parsed = sanitizeWorkspaceTab(tab);
+    if (parsed && isChatTab(parsed) && hasLocalState(parsed.chatId)) {
+      ids.add(parsed.chatId);
     }
   });
 
@@ -373,12 +516,36 @@ export const sanitizeWorkspaceSnapshot = (
   validChatIds: string[] = deriveValidChatIds(snapshot),
 ): WorkspaceSnapshot => {
   const validIdSet = new Set([...validChatIds, ...deriveRecoverableChatIds(snapshot)]);
-  const openChatIds = dedupeIds(snapshot.openChatIds ?? []).filter((chatId) => validIdSet.has(chatId));
-  const activeChatId =
-    snapshot.activeChatId && validIdSet.has(snapshot.activeChatId) ? snapshot.activeChatId : null;
+  const legacyOpenTabs = dedupeIds(snapshot.openChatIds ?? [])
+    .filter((chatId) => validIdSet.has(chatId))
+    .map((chatId) => createChatTab(chatId));
+  const openTabs = (Array.isArray(snapshot.openTabs)
+    ? snapshot.openTabs
+        .map(sanitizeWorkspaceTab)
+        .filter((tab): tab is WorkspaceTab => Boolean(tab))
+        .filter((tab) => (isChatTab(tab) ? validIdSet.has(tab.chatId) : true))
+    : legacyOpenTabs
+  ).reduce<WorkspaceTab[]>((tabs, tab) => {
+    if (tabs.some((entry) => entry.id === tab.id)) {
+      return tabs;
+    }
 
-  if (activeChatId && !openChatIds.includes(activeChatId)) {
-    openChatIds.unshift(activeChatId);
+    return [...tabs, tab];
+  }, []);
+  const legacyActiveTabId =
+    snapshot.activeChatId && validIdSet.has(snapshot.activeChatId) ? createChatTab(snapshot.activeChatId).id : null;
+  const activeTabId =
+    typeof snapshot.activeTabId === 'string' && openTabs.some((tab) => tab.id === snapshot.activeTabId)
+      ? snapshot.activeTabId
+      : legacyActiveTabId && openTabs.some((tab) => tab.id === legacyActiveTabId)
+        ? legacyActiveTabId
+        : openTabs[0]?.id ?? null;
+
+  if (activeTabId && !openTabs.some((tab) => tab.id === activeTabId)) {
+    const activeChatId = activeTabId.startsWith('chat:') ? activeTabId.slice('chat:'.length) : '';
+    if (activeChatId && validIdSet.has(activeChatId)) {
+      openTabs.unshift(createChatTab(activeChatId));
+    }
   }
 
   const draftEntries = Object.entries(snapshot.draftsByChatId ?? {}).filter(
@@ -460,20 +627,31 @@ export const sanitizeWorkspaceSnapshot = (
       : []),
     ...Object.values(cachedThreadsByChatId).map(summarizeCachedThread),
   ]);
+  const cachedTerminalSessionsById = Object.fromEntries(
+    Object.entries(snapshot.cachedTerminalSessionsById ?? {}).flatMap(([sessionId, value]) => {
+      const session = sanitizeTerminalSession(value);
+      if (!session || session.idHash !== sessionId) {
+        return [];
+      }
+
+      return [[sessionId, session] satisfies [string, TerminalSessionSummary]];
+    }),
+  ) as Record<string, TerminalSessionSummary>;
 
   return {
-    activeChatId: activeChatId ?? openChatIds[0] ?? null,
+    activeTabId,
     cachedChats,
     cachedThreadsByChatId,
+    cachedTerminalSessionsById,
     chatSettingsByChatId,
     draftsByChatId,
-    openChatIds,
+    openTabs,
   };
 };
 
 export const loadWorkspaceSnapshot = (validChatIds?: string[]) => {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) {
       return null;
     }
@@ -491,36 +669,39 @@ export const loadWorkspaceSnapshot = (validChatIds?: string[]) => {
 };
 
 export const saveWorkspaceSnapshot = ({
-  activeChatId,
+  activeTabId,
   cachedChats,
   cachedThreadsByChatId,
+  cachedTerminalSessionsById,
   chatSettingsByChatId,
   draftsByChatId,
-  openChatIds,
+  openTabs,
 }: WorkspaceSnapshot) => {
   try {
     const compactSnapshot = compactWorkspaceSnapshotForStorage({
-      activeChatId,
+      activeTabId,
       cachedChats,
       cachedThreadsByChatId,
+      cachedTerminalSessionsById,
       chatSettingsByChatId,
       draftsByChatId,
-      openChatIds,
+      openTabs,
     });
 
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        activeChatId: compactSnapshot.activeChatId,
+        activeTabId: compactSnapshot.activeTabId,
         cachedChats: compactSnapshot.cachedChats,
         cachedThreadsByChatId: compactSnapshot.cachedThreadsByChatId,
+        cachedTerminalSessionsById: compactSnapshot.cachedTerminalSessionsById,
         chatSettingsByChatId: Object.fromEntries(
           Object.entries(compactSnapshot.chatSettingsByChatId).filter(([, settings]) => settings.accessMode && settings.roots),
         ),
         draftsByChatId: Object.fromEntries(
           Object.entries(compactSnapshot.draftsByChatId).filter(([, draft]) => draft.trim().length > 0),
         ),
-        openChatIds: compactSnapshot.openChatIds,
+        openTabs: compactSnapshot.openTabs,
       } satisfies WorkspaceSnapshot),
     );
   } catch {

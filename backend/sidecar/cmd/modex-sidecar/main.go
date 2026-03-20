@@ -63,6 +63,8 @@ func main() {
 		cfg.AuthToken != "",
 		"filesystem_roots",
 		cfg.Filesystem.AllowedRoots,
+		"tmuy_bin",
+		cfg.Terminal.Binary,
 		"transcription_configured",
 		cfg.Transcription.APIKey != "",
 	)

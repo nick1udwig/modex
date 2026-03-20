@@ -1,21 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
-import { chatStatusLabel, isChatActiveStatus } from '../app/chatStatus';
-import type { ChatSummary, ChatTab } from '../app/types';
+import { isChatTab, isTabActive, terminalSessionPreview } from '../app/tabs';
+import type { ChatSummary, TerminalSessionSummary, WorkspaceTab } from '../app/types';
 import { HighlightedText } from './HighlightedText';
 import { Icon } from './Icon';
 
 interface TabsOverviewProps {
-  activeChatId: string | null;
+  activeTabId: string | null;
   chats: ChatSummary[];
-  maskedChatId?: string | null;
-  onActivate: (chatId: string) => void;
-  onClose: (chatId: string) => void;
+  maskedTabId?: string | null;
+  onActivate: (tabId: string) => void;
+  onClose: (tabId: string) => void;
   onOpenChats: () => void;
-  registerTabNode?: (chatId: string, node: HTMLButtonElement | null) => void;
+  registerTabNode?: (tabId: string, node: HTMLButtonElement | null) => void;
   searchQuery: string;
-  selectedSearchChatId?: string | null;
-  tabs: ChatTab[];
+  selectedSearchTabId?: string | null;
+  tabs: WorkspaceTab[];
+  terminalSessionsById: Record<string, TerminalSessionSummary>;
 }
 
 const relativeTime = (iso: string) => {
@@ -49,7 +50,7 @@ const splitSnippet = (text: string, limit: number) => {
   };
 };
 
-const snippetFor = (chat: ChatSummary | undefined) => {
+const snippetForChat = (chat: ChatSummary | undefined) => {
   if (!chat) {
     return {
       primary: 'Waiting for the next remote task.',
@@ -67,6 +68,21 @@ const snippetFor = (chat: ChatSummary | undefined) => {
   };
 };
 
+const snippetForTerminal = (session: TerminalSessionSummary | undefined) => {
+  if (!session) {
+    return {
+      primary: 'Terminal session unavailable.',
+      secondary: 'Reconnect to refresh its state.',
+    };
+  }
+
+  const primary = splitSnippet(terminalSessionPreview(session), 56);
+  return {
+    primary: primary.chunk || 'Interactive shell session',
+    secondary: session.status === 'live' ? 'Attached to tmuy' : relativeTime(session.updatedAt),
+  };
+};
+
 interface TabCardProps {
   active: boolean;
   chat: ChatSummary | undefined;
@@ -76,16 +92,18 @@ interface TabCardProps {
   registerNode?: (node: HTMLButtonElement | null) => void;
   searchQuery: string;
   searchSelected: boolean;
-  tab: ChatTab;
+  session: TerminalSessionSummary | undefined;
+  tab: WorkspaceTab;
 }
 
 const SWIPE_THRESHOLD = 72;
 
-const TabCard = ({ active, chat, masked, onActivate, onClose, registerNode, searchQuery, searchSelected, tab }: TabCardProps) => {
+const TabCard = ({ active, chat, masked, onActivate, onClose, registerNode, searchQuery, searchSelected, session, tab }: TabCardProps) => {
   const [dragOffset, setDragOffset] = useState(0);
   const dragStartX = useRef<number | null>(null);
   const moved = useRef(false);
-  const snippet = useMemo(() => snippetFor(chat), [chat]);
+  const snippet = useMemo(() => (isChatTab(tab) ? snippetForChat(chat) : snippetForTerminal(session)), [chat, session, tab]);
+  const title = isChatTab(tab) ? chat?.title ?? 'Untitled' : session?.currentName ?? 'Terminal session';
 
   const resetDrag = () => {
     dragStartX.current = null;
@@ -130,7 +148,7 @@ const TabCard = ({ active, chat, masked, onActivate, onClose, registerNode, sear
   return (
     <button
       ref={registerNode}
-      className={`tab-card ${isChatActiveStatus(tab.status) ? 'tab-card--running' : ''} ${
+      className={`tab-card ${isTabActive(tab) ? 'tab-card--running' : ''} ${
         active ? 'tab-card--active' : ''
       } ${masked ? 'tab-card--masked' : ''} ${searchSelected ? 'tab-card--search' : ''}`}
       type="button"
@@ -155,11 +173,13 @@ const TabCard = ({ active, chat, masked, onActivate, onClose, registerNode, sear
     >
       <div className="tab-card__header">
         <span className="tab-card__title">
-          <HighlightedText query={searchQuery} text={chat?.title ?? 'Untitled'} />
+          <HighlightedText query={searchQuery} text={title} />
         </span>
-        {isChatActiveStatus(tab.status) ? (
+        {tab.kind === 'terminal' ? (
+          <Icon name="terminal" size={14} className="tab-card__icon tab-card__icon--terminal" />
+        ) : isTabActive(tab) ? (
           <Icon name="loader" size={14} spin className="tab-card__icon tab-card__icon--running" />
-        ) : tab.hasUnreadCompletion ? (
+        ) : isChatTab(tab) && tab.hasUnreadCompletion ? (
           <span className="tab-card__dot tab-card__dot--unread" aria-hidden="true" />
         ) : (
           <span className="tab-card__dot tab-card__dot--idle" aria-hidden="true" />
@@ -173,39 +193,40 @@ const TabCard = ({ active, chat, masked, onActivate, onClose, registerNode, sear
         <HighlightedText query={searchQuery} text={snippet.secondary} />
       </p>
       <span
-        className={`tab-card__state ${isChatActiveStatus(tab.status) ? 'tab-card__state--running' : ''} ${
-          tab.hasUnreadCompletion ? 'tab-card__state--unread' : ''
+        className={`tab-card__state ${isTabActive(tab) ? 'tab-card__state--running' : ''} ${
+          isChatTab(tab) && tab.hasUnreadCompletion ? 'tab-card__state--unread' : ''
         }`}
       >
-        {isChatActiveStatus(tab.status) ? chatStatusLabel(tab.status) : tab.hasUnreadCompletion ? 'New reply' : 'Ready'}
+        {isChatTab(tab) ? (isTabActive(tab) ? 'In progress' : tab.hasUnreadCompletion ? 'New reply' : 'Ready') : snippet.secondary}
       </span>
     </button>
   );
 };
 
 export const TabsBar = ({
-  activeChatId,
+  activeTabId,
   chats,
-  maskedChatId = null,
+  maskedTabId = null,
   onActivate,
   onClose,
   onOpenChats,
   registerTabNode,
   searchQuery,
-  selectedSearchChatId = null,
+  selectedSearchTabId = null,
   tabs,
+  terminalSessionsById,
 }: TabsOverviewProps) => {
   const cardRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   useEffect(() => {
-    if (!selectedSearchChatId) {
+    if (!selectedSearchTabId) {
       return;
     }
 
-    cardRefs.current[selectedSearchChatId]?.scrollIntoView({
+    cardRefs.current[selectedSearchTabId]?.scrollIntoView({
       block: 'nearest',
     });
-  }, [selectedSearchChatId]);
+  }, [selectedSearchTabId]);
 
   return (
     <section className="tabs-screen">
@@ -218,26 +239,28 @@ export const TabsBar = ({
 
       <div className="tabs-grid" role="list" aria-label="Open chats">
         {tabs.length === 0 ? (
-          <div className="tabs-empty">No tabs are open yet. Create a new chat to start a session.</div>
+          <div className="tabs-empty">No tabs are open yet. Create a Codex or terminal tab to get started.</div>
         ) : null}
 
         {tabs.map((tab) => {
-          const chat = chats.find((item) => item.id === tab.chatId);
+          const chat = isChatTab(tab) ? chats.find((item) => item.id === tab.chatId) : undefined;
+          const session = tab.kind === 'terminal' ? terminalSessionsById[tab.sessionId] : undefined;
 
           return (
             <TabCard
-              key={tab.chatId}
-              active={activeChatId === tab.chatId}
+              key={tab.id}
+              active={activeTabId === tab.id}
               chat={chat}
-              masked={maskedChatId === tab.chatId}
+              masked={maskedTabId === tab.id}
               searchQuery={searchQuery}
-              searchSelected={selectedSearchChatId === tab.chatId}
+              searchSelected={selectedSearchTabId === tab.id}
+              session={session}
               tab={tab}
-              onActivate={() => onActivate(tab.chatId)}
-              onClose={() => onClose(tab.chatId)}
+              onActivate={() => onActivate(tab.id)}
+              onClose={() => onClose(tab.id)}
               registerNode={(node) => {
-                cardRefs.current[tab.chatId] = node;
-                registerTabNode?.(tab.chatId, node);
+                cardRefs.current[tab.id] = node;
+                registerTabNode?.(tab.id, node);
               }}
             />
           );

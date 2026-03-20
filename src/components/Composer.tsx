@@ -5,6 +5,7 @@ import { Icon } from './Icon';
 import { InteractionPrompt } from './InteractionPrompt';
 
 type FooterAction = 'tabs' | 'new-tab';
+type ComposerMode = 'chat' | 'tabs';
 
 interface ComposerProps {
   accessMode: AccessMode | null;
@@ -16,6 +17,7 @@ interface ComposerProps {
   inputDisabled?: boolean;
   interactionRequest: InteractionRequest | null;
   maskFooterAction?: boolean;
+  mode: ComposerMode;
   onAttachFiles: (files: FileList) => void;
   onApprovalDecision: (decision: ApprovalDecision) => void;
   onCloseSearch: () => void;
@@ -54,6 +56,7 @@ export const Composer = ({
   inputDisabled = false,
   interactionRequest,
   maskFooterAction = false,
+  mode,
   onAttachFiles,
   onApprovalDecision,
   onCloseSearch,
@@ -91,6 +94,7 @@ export const Composer = ({
   const showStop = busy && !recording;
   const showSend = !showStop && !searchActive && (hasDraft || attachments.length > 0) && !recording;
   const recordingLabel = recordingStatus === 'connecting' ? 'Starting voice' : voiceProcessing ? 'Finishing voice' : 'Transcribing';
+  const showChatControls = mode === 'chat';
 
   useEffect(() => {
     if (!inputRef.current) {
@@ -145,7 +149,7 @@ export const Composer = ({
 
   return (
     <div ref={composerRef} className={`composer-shell ${searchActive ? 'composer-shell--search' : ''}`}>
-      {interactionRequest ? (
+      {showChatControls && interactionRequest ? (
         <InteractionPrompt
           request={interactionRequest}
           onApprovalDecision={onApprovalDecision}
@@ -155,7 +159,7 @@ export const Composer = ({
 
       {error ? <p className="composer-error">{error}</p> : null}
 
-      {attachments.length > 0 ? (
+      {showChatControls && attachments.length > 0 ? (
         <div className="composer-attachments" aria-label="Pending attachments">
           {attachments.map((attachment) => (
             <div key={attachment.id} className="composer-attachment">
@@ -173,116 +177,120 @@ export const Composer = ({
         </div>
       ) : null}
 
-      <div className="composer-row">
-        <button
-          className="footer-icon footer-icon--muted"
-          type="button"
-          onClick={() => {
-            if (searchActive) {
-              onCloseSearch();
-              return;
-            }
-
-            fileInputRef.current?.click();
-          }}
-          aria-label={searchActive ? 'Exit search' : 'Attach a file or photo'}
-        >
-          <Icon name={searchActive ? 'arrow-left' : 'plus'} size={16} />
-        </button>
-
-        <div className="composer-input">
-          <textarea
-            ref={inputRef}
-            rows={1}
-            value={searchActive ? searchQuery : draft}
-            disabled={inputDisabled}
-            placeholder={searchActive ? 'Search query' : 'Ask anything'}
-            aria-label={searchActive ? 'Search query' : 'Ask anything'}
-            onChange={(event) => (searchActive ? onSearchQueryChange(event.target.value) : onDraftChange(event.target.value))}
-            onKeyDown={(event) => {
-              if (inputDisabled) {
-                return;
-              }
-
-              if (searchActive) {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  onSearchNext();
-                }
-                return;
-              }
-
-              if (slashCommands.length > 0) {
-                if (event.key === 'ArrowDown') {
-                  event.preventDefault();
-                  setSlashSelectionIndex((current) => (current + 1) % slashCommands.length);
-                  return;
-                }
-
-                if (event.key === 'ArrowUp') {
-                  event.preventDefault();
-                  setSlashSelectionIndex((current) => (current - 1 + slashCommands.length) % slashCommands.length);
-                  return;
-                }
-              }
-
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                if (slashCommands.length > 0) {
-                  onExecuteSlashCommand(slashCommands[slashSelectionIndex] ?? slashCommands[0]);
-                  return;
-                }
-
-                if (hasDraft && !busy) {
-                  onSend();
-                }
-              }
-            }}
-          />
-
+      {showChatControls || searchActive ? (
+        <div className="composer-row">
           <button
-            className={`composer-send ${showSend ? 'composer-send--active' : ''} ${
-              recording ? 'composer-send--recording' : ''
-            } ${showStop ? 'composer-send--stop' : ''}`}
+            className="footer-icon footer-icon--muted"
             type="button"
             onClick={() => {
-              if (showStop) {
-                onStopRun();
+              if (searchActive) {
+                onCloseSearch();
                 return;
               }
 
-              if (showSend && !busy) {
-                onSend();
-                return;
-              }
-
-              if (voiceProcessing) {
-                return;
-              }
-
-              onToggleVoiceInput();
+              fileInputRef.current?.click();
             }}
-            aria-label={
-              showStop
-                ? 'Stop current run'
-                : showSend
-                  ? 'Send message'
-                  : voiceProcessing
-                    ? 'Finishing voice input'
-                    : recording
-                    ? `${recordingLabel}. Tap to stop voice input`
-                    : 'Voice input'
-            }
-            aria-pressed={recording || showStop}
-            aria-disabled={showSend ? busy : voiceProcessing}
+            aria-label={searchActive ? 'Exit search' : 'Attach a file or photo'}
           >
-            <Icon name={showStop ? 'stop' : showSend ? 'arrow-up' : 'mic'} size={16} />
-            {recording ? <span className="composer-send__label">{recordingLabel}</span> : null}
+            <Icon name={searchActive ? 'arrow-left' : 'plus'} size={16} />
           </button>
-        </div>
-      </div>
 
-      {!searchActive && slashCommands.length > 0 ? (
+          <div className="composer-input">
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={searchActive ? searchQuery : draft}
+              disabled={!searchActive && !showChatControls ? true : inputDisabled}
+              placeholder={searchActive ? 'Search query' : 'Ask anything'}
+              aria-label={searchActive ? 'Search query' : 'Ask anything'}
+              onChange={(event) => (searchActive ? onSearchQueryChange(event.target.value) : onDraftChange(event.target.value))}
+              onKeyDown={(event) => {
+                if ((!showChatControls && !searchActive) || inputDisabled) {
+                  return;
+                }
+
+                if (searchActive) {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    onSearchNext();
+                  }
+                  return;
+                }
+
+                if (slashCommands.length > 0) {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setSlashSelectionIndex((current) => (current + 1) % slashCommands.length);
+                    return;
+                  }
+
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setSlashSelectionIndex((current) => (current - 1 + slashCommands.length) % slashCommands.length);
+                    return;
+                  }
+                }
+
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  if (slashCommands.length > 0) {
+                    onExecuteSlashCommand(slashCommands[slashSelectionIndex] ?? slashCommands[0]);
+                    return;
+                  }
+
+                  if (hasDraft && !busy) {
+                    onSend();
+                  }
+                }
+              }}
+            />
+
+            {showChatControls ? (
+              <button
+                className={`composer-send ${showSend ? 'composer-send--active' : ''} ${
+                  recording ? 'composer-send--recording' : ''
+                } ${showStop ? 'composer-send--stop' : ''}`}
+                type="button"
+                onClick={() => {
+                  if (showStop) {
+                    onStopRun();
+                    return;
+                  }
+
+                  if (showSend && !busy) {
+                    onSend();
+                    return;
+                  }
+
+                  if (voiceProcessing) {
+                    return;
+                  }
+
+                  onToggleVoiceInput();
+                }}
+                aria-label={
+                  showStop
+                    ? 'Stop current run'
+                    : showSend
+                      ? 'Send message'
+                      : voiceProcessing
+                        ? 'Finishing voice input'
+                        : recording
+                        ? `${recordingLabel}. Tap to stop voice input`
+                        : 'Voice input'
+                }
+                aria-pressed={recording || showStop}
+                aria-disabled={showSend ? busy : voiceProcessing}
+              >
+                <Icon name={showStop ? 'stop' : showSend ? 'arrow-up' : 'mic'} size={16} />
+                {recording ? <span className="composer-send__label">{recordingLabel}</span> : null}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {!searchActive && showChatControls && slashCommands.length > 0 ? (
         <div className="composer-slash" aria-label="Slash command suggestions">
           {slashCommands.map((suggestion, index) => (
             <button
@@ -299,18 +307,20 @@ export const Composer = ({
         </div>
       ) : null}
 
-      <input
-        ref={fileInputRef}
-        className="composer-file-input"
-        type="file"
-        multiple
-        onChange={(event) => {
-          if (event.target.files && event.target.files.length > 0) {
-            onAttachFiles(event.target.files);
-          }
-          event.target.value = '';
-        }}
-      />
+      {showChatControls ? (
+        <input
+          ref={fileInputRef}
+          className="composer-file-input"
+          type="file"
+          multiple
+          onChange={(event) => {
+            if (event.target.files && event.target.files.length > 0) {
+              onAttachFiles(event.target.files);
+            }
+            event.target.value = '';
+          }}
+        />
+      ) : null}
 
       <div className={`footer-nav ${searchActive ? 'footer-nav--search' : ''}`}>
         {searchActive ? (
@@ -352,66 +362,70 @@ export const Composer = ({
               </button>
             )}
 
-            <div className="footer-menu">
-              <button
-                className="footer-icon footer-icon--muted"
-                type="button"
-                onClick={() => {
-                  if (accessMode) {
-                    setMenuOpen((current) => !current);
-                  }
-                }}
-                aria-label="More actions"
-                aria-disabled={!accessMode}
-              >
-                <Icon name="ellipsis" size={18} />
-              </button>
+            {showChatControls ? (
+              <div className="footer-menu">
+                <button
+                  className="footer-icon footer-icon--muted"
+                  type="button"
+                  onClick={() => {
+                    if (accessMode) {
+                      setMenuOpen((current) => !current);
+                    }
+                  }}
+                  aria-label="More actions"
+                  aria-disabled={!accessMode}
+                >
+                  <Icon name="ellipsis" size={18} />
+                </button>
 
-              {menuOpen && accessMode ? (
-                <div className="footer-menu__panel">
-                  <div className="footer-menu__label">Access</div>
-                  <div className="footer-menu__toggle">
-                    <button
-                      className={`footer-menu__toggle-button ${
-                        accessMode === 'read-only' ? 'footer-menu__toggle-button--active' : ''
-                      }`}
-                      type="button"
-                      onClick={() => {
-                        onToggleAccessMode('read-only');
-                        setMenuOpen(false);
-                      }}
-                    >
-                      Read
-                    </button>
-                    <button
-                      className={`footer-menu__toggle-button ${
-                        accessMode === 'workspace-write' ? 'footer-menu__toggle-button--active' : ''
-                      }`}
-                      type="button"
-                      onClick={() => {
-                        onToggleAccessMode('workspace-write');
-                        setMenuOpen(false);
-                      }}
-                    >
-                      Write
-                    </button>
+                {menuOpen && accessMode ? (
+                  <div className="footer-menu__panel">
+                    <div className="footer-menu__label">Access</div>
+                    <div className="footer-menu__toggle">
+                      <button
+                        className={`footer-menu__toggle-button ${
+                          accessMode === 'read-only' ? 'footer-menu__toggle-button--active' : ''
+                        }`}
+                        type="button"
+                        onClick={() => {
+                          onToggleAccessMode('read-only');
+                          setMenuOpen(false);
+                        }}
+                      >
+                        Read
+                      </button>
+                      <button
+                        className={`footer-menu__toggle-button ${
+                          accessMode === 'workspace-write' ? 'footer-menu__toggle-button--active' : ''
+                        }`}
+                        type="button"
+                        onClick={() => {
+                          onToggleAccessMode('workspace-write');
+                          setMenuOpen(false);
+                        }}
+                      >
+                        Write
+                      </button>
+                    </div>
+
+                    {onEditDirectories ? (
+                      <button
+                        className="footer-menu__secondary"
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onEditDirectories();
+                        }}
+                      >
+                        Edit directories
+                      </button>
+                    ) : null}
                   </div>
-
-                  {onEditDirectories ? (
-                    <button
-                      className="footer-menu__secondary"
-                      type="button"
-                      onClick={() => {
-                        setMenuOpen(false);
-                        onEditDirectories();
-                      }}
-                    >
-                      Edit directories
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="footer-search-meta footer-search-meta--placeholder">Browse tabs</div>
+            )}
           </>
         )}
       </div>

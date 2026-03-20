@@ -1,4 +1,5 @@
 import type { ActivityEntry, ActivityStatus, ChatStatus, ChatSummary, ChatTab, ChatThread, Message } from '../app/types';
+import { createChatTab } from '../app/tabs';
 
 export const mergeThreadSummary = (thread: ChatThread, summary: ChatSummary): ChatThread => ({
   ...thread,
@@ -145,14 +146,7 @@ export const ensureTab = (
     );
   }
 
-  return [
-    ...tabs,
-    {
-      chatId,
-      hasUnreadCompletion: options?.hasUnreadCompletion ?? false,
-      status,
-    },
-  ];
+  return [...tabs, createChatTab(chatId, status, options)];
 };
 
 export const setTabStatusIfOpen = (tabs: ChatTab[], chatId: string, status: ChatTab['status']) =>
@@ -241,8 +235,4 @@ export const setThreadTokenUsage = (thread: ChatThread, label: string | null): C
 });
 
 export const defaultOpenTabs = (chats: ChatSummary[]) =>
-  chats.slice(0, Math.min(chats.length, 2)).map((chat) => ({
-    chatId: chat.id,
-    hasUnreadCompletion: false,
-    status: chat.status,
-  }));
+  chats.slice(0, Math.min(chats.length, 2)).map((chat) => createChatTab(chat.id, chat.status));

@@ -2,15 +2,18 @@ import { useEffect, useMemo, useState } from 'react';
 import type {
   ActivityEntry,
   ApprovalDecision,
-  ChatTab,
   ChatRuntimeSettings,
   InteractionRequest,
   ChatSummary,
   ChatThread,
   PendingAttachment,
   RemoteAppClient,
+  RemoteTerminalClient,
   RemoteThreadEvent,
+  TerminalSessionSummary,
+  WorkspaceTab,
 } from '../app/types';
+import { chatTabId, createChatTab, createTerminalTab, isChatTab, isTerminalTab } from '../app/tabs';
 import { isChatActiveStatus } from '../app/chatStatus';
 import {
   appendMessageDelta,
@@ -18,14 +21,11 @@ import {
   defaultOpenTabs,
   deriveLiveActivity,
   downgradeMissingThread,
-  ensureTab,
   mergeLiveActivity,
   mergeBootstrapThread,
   mergeThreadSummary,
   replaceOrAppendMessage,
   sanitizeBootstrapThread,
-  setTabStatusIfOpen,
-  setTabUnreadIfOpen,
   setThreadTokenUsage,
   shouldHoldIdleStatusUntilThreadSync,
   summarizeThread,
@@ -34,8 +34,16 @@ import {
 } from './modexState';
 import { isAppServerThreadNotFoundError } from '../services/appServerClient';
 import { loadWorkspaceSnapshot, saveWorkspaceSnapshot } from './workspaceStorage';
+import {
+  ensureChatWorkspaceTab,
+  ensureTerminalWorkspaceTab,
+  setChatTabStatusIfOpen,
+  setChatTabUnreadIfOpen,
+  setTerminalTabStatusIfOpen,
+} from './workspaceTabs';
 
 interface ModexState {
+  activeTabId: string | null;
   activeChatId: string | null;
   attachmentsByChatId: Record<string, PendingAttachment[]>;
   chatMap: Record<string, ChatThread>;
@@ -46,7 +54,8 @@ interface ModexState {
   interactionByChatId: Record<string, InteractionRequest | undefined>;
   liveActivityByChatId: Record<string, ActivityEntry[]>;
   loading: boolean;
-  openTabs: ChatTab[];
+  openTabs: WorkspaceTab[];
+  terminalSessionsById: Record<string, TerminalSessionSummary>;
 }
 
 const DEFAULT_ACCESS_MODE: ChatRuntimeSettings['accessMode'] = 'workspace-write';
@@ -64,14 +73,25 @@ const bootstrapWorkspace = () => {
     status: cachedThreadsByChatId[chat.id]?.status ?? chat.status,
   }));
   const cachedStatusByChatId = new Map(cachedChats.map((chat) => [chat.id, chat.status] satisfies [string, ChatSummary['status']]));
-  const openTabs = workspace.openChatIds.map((chatId) => ({
-    chatId,
-    hasUnreadCompletion: false,
-    status: cachedThreadsByChatId[chatId]?.status ?? cachedStatusByChatId.get(chatId) ?? 'idle',
-  }));
+  const terminalSessionsById = workspace.cachedTerminalSessionsById;
+  const openTabs = workspace.openTabs.map((tab) => {
+    if (isChatTab(tab)) {
+      return createChatTab(tab.chatId, cachedThreadsByChatId[tab.chatId]?.status ?? cachedStatusByChatId.get(tab.chatId) ?? tab.status, {
+        hasUnreadCompletion: tab.hasUnreadCompletion,
+      });
+    }
+
+    return createTerminalTab(tab.sessionId, terminalSessionsById[tab.sessionId]?.status ?? tab.status);
+  });
+  const activeTabId = workspace.activeTabId ?? openTabs[0]?.id ?? (cachedChats[0] ? chatTabId(cachedChats[0].id) : null);
+  const activeChatId =
+    activeTabId && openTabs.some((tab) => tab.id === activeTabId && isChatTab(tab))
+      ? ((openTabs.find((tab) => tab.id === activeTabId) as ReturnType<typeof createChatTab> | undefined)?.chatId ?? null)
+      : null;
 
   return {
-    activeChatId: workspace.activeChatId ?? openTabs[0]?.chatId ?? cachedChats[0]?.id ?? null,
+    activeChatId,
+    activeTabId,
     attachmentsByChatId: {},
     chatMap: cachedThreadsByChatId,
     chatSettingsByChatId: workspace.chatSettingsByChatId,
@@ -87,6 +107,7 @@ const bootstrapWorkspace = () => {
     ),
     loading: true,
     openTabs,
+    terminalSessionsById,
   } satisfies ModexState;
 };
 
@@ -177,6 +198,15 @@ const clearLiveActivityForChat = (
   return next;
 };
 
+const activeChatIdForTab = (activeTabId: string | null, openTabs: WorkspaceTab[]) => {
+  if (!activeTabId) {
+    return null;
+  }
+
+  const activeTab = openTabs.find((tab) => tab.id === activeTabId);
+  return activeTab && isChatTab(activeTab) ? activeTab.chatId : null;
+};
+
 const shouldMarkUnreadCompletion = (
   current: ModexState,
   chatId: string,
@@ -184,13 +214,13 @@ const shouldMarkUnreadCompletion = (
 ) =>
   nextStatus === 'idle' &&
   current.activeChatId !== chatId &&
-  current.openTabs.some((tab) => tab.chatId === chatId && isChatActiveStatus(tab.status));
+  current.openTabs.some((tab) => isChatTab(tab) && tab.chatId === chatId && isChatActiveStatus(tab.status));
 
 const applyThread = (current: ModexState, thread: ChatThread): ModexState => {
   const shouldMarkUnread = shouldMarkUnreadCompletion(current, thread.id, thread.status);
   const openTabs = shouldMarkUnread
-    ? setTabUnreadIfOpen(setTabStatusIfOpen(current.openTabs, thread.id, thread.status), thread.id, true)
-    : setTabStatusIfOpen(current.openTabs, thread.id, thread.status);
+    ? setChatTabUnreadIfOpen(setChatTabStatusIfOpen(current.openTabs, thread.id, thread.status), thread.id, true)
+    : setChatTabStatusIfOpen(current.openTabs, thread.id, thread.status);
   const backendLiveActivity = deriveLiveActivity(thread);
   const liveActivityByChatId =
     isChatActiveStatus(thread.status)
@@ -240,7 +270,7 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
               }),
             }
           : current.chatMap,
-        openTabs: setTabStatusIfOpen(current.openTabs, event.summary.id, event.summary.status),
+        openTabs: setChatTabStatusIfOpen(current.openTabs, event.summary.id, event.summary.status),
       };
     }
 
@@ -283,8 +313,8 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
             ? clearLiveActivityForChat(current.liveActivityByChatId, event.chatId)
             : current.liveActivityByChatId,
         openTabs: shouldMarkUnreadCompletion(current, event.chatId, effectiveStatus)
-          ? setTabUnreadIfOpen(setTabStatusIfOpen(current.openTabs, event.chatId, effectiveStatus), event.chatId, true)
-          : setTabStatusIfOpen(current.openTabs, event.chatId, effectiveStatus),
+          ? setChatTabUnreadIfOpen(setChatTabStatusIfOpen(current.openTabs, event.chatId, effectiveStatus), event.chatId, true)
+          : setChatTabStatusIfOpen(current.openTabs, event.chatId, effectiveStatus),
       };
     }
 
@@ -407,10 +437,11 @@ const applyRemoteEvent = (current: ModexState, event: RemoteThreadEvent): ModexS
   }
 };
 
-export const useModexApp = (client: RemoteAppClient) => {
+export const useModexApp = (client: RemoteAppClient, terminalClient: RemoteTerminalClient) => {
   const [state, setState] = useState<ModexState>(
     () =>
       bootstrapWorkspace() ?? {
+        activeTabId: null,
         activeChatId: null,
         attachmentsByChatId: {},
         chatMap: {},
@@ -422,6 +453,7 @@ export const useModexApp = (client: RemoteAppClient) => {
         liveActivityByChatId: {},
         loading: true,
         openTabs: [],
+        terminalSessionsById: {},
       },
   );
 
@@ -438,13 +470,14 @@ export const useModexApp = (client: RemoteAppClient) => {
         const workspace = loadWorkspaceSnapshot(chats.map((chat) => chat.id));
         const seedChats = mergeSummaryLists(chats, workspace?.cachedChats ?? []);
 
-        if (seedChats.length === 0) {
+        if (seedChats.length === 0 && (workspace?.openTabs.length ?? 0) === 0) {
           const created = await client.createChat();
           if (cancelled) {
             return;
           }
 
           setState({
+            activeTabId: chatTabId(created.id),
             activeChatId: created.id,
             attachmentsByChatId: {},
             chatMap: {
@@ -459,27 +492,35 @@ export const useModexApp = (client: RemoteAppClient) => {
             interactionByChatId: {},
             liveActivityByChatId: {},
             loading: false,
-            openTabs: [{ chatId: created.id, hasUnreadCompletion: false, status: created.status }],
+            openTabs: [createChatTab(created.id, created.status)],
+            terminalSessionsById: workspace?.cachedTerminalSessionsById ?? {},
           });
           return;
         }
 
-        const openTabs = workspace
-          ? workspace.openChatIds.map((chatId) => ({
-              chatId,
-              hasUnreadCompletion: false,
-              status:
-                seedChats.find((chat) => chat.id === chatId)?.status ??
-                workspace.cachedThreadsByChatId[chatId]?.status ??
-                'idle',
-            }))
+        const openChatTabs = workspace
+          ? workspace.openTabs.flatMap((tab) =>
+              isChatTab(tab)
+                ? [
+                    createChatTab(
+                      tab.chatId,
+                      seedChats.find((chat) => chat.id === tab.chatId)?.status ??
+                        workspace.cachedThreadsByChatId[tab.chatId]?.status ??
+                        tab.status,
+                      {
+                        hasUnreadCompletion: tab.hasUnreadCompletion,
+                      },
+                    ),
+                  ]
+                : [],
+            )
           : defaultOpenTabs(seedChats);
         const activeChatId = workspace
-          ? workspace.activeChatId ?? openTabs[0]?.chatId ?? seedChats[0]?.id ?? null
-          : openTabs[0]?.chatId ?? seedChats[0]?.id ?? null;
+          ? activeChatIdForTab(workspace.activeTabId, workspace.openTabs) ?? openChatTabs[0]?.chatId ?? seedChats[0]?.id ?? null
+          : openChatTabs[0]?.chatId ?? seedChats[0]?.id ?? null;
 
         const chatIdsToHydrate = [
-          ...new Set([activeChatId, ...openTabs.map((tab) => tab.chatId)].filter((chatId): chatId is string => Boolean(chatId))),
+          ...new Set([activeChatId, ...openChatTabs.map((tab) => tab.chatId)].filter((chatId): chatId is string => Boolean(chatId))),
         ];
         const hydratedResults = await Promise.allSettled(chatIdsToHydrate.map((chatId) => client.getChat(chatId)));
         const missingHydrationChatIds = new Set<string>();
@@ -550,15 +591,42 @@ export const useModexApp = (client: RemoteAppClient) => {
           const summaryByChatId = new Map(
             mergedChats.map((chat) => [chat.id, chat] satisfies [string, ChatSummary]),
           );
-          const mergedOpenTabs = [...current.openTabs, ...openTabs]
+          const mergedOpenTabs = [...current.openTabs, ...(workspace?.openTabs ?? [])]
             .reduce<typeof current.openTabs>((tabs, tab) => {
-              if (tabs.some((entry) => entry.chatId === tab.chatId)) {
+              if (isChatTab(tab)) {
+                if (!summaryByChatId.has(tab.chatId)) {
+                  return tabs;
+                }
+
+                if (tabs.some((entry) => entry.id === tab.id)) {
+                  return tabs.map((entry) =>
+                    isChatTab(entry) && entry.chatId === tab.chatId
+                      ? {
+                          ...entry,
+                          hasUnreadCompletion: entry.hasUnreadCompletion || tab.hasUnreadCompletion,
+                          status: summaryByChatId.get(tab.chatId)?.status ?? entry.status,
+                        }
+                      : entry,
+                  );
+                }
+
+                return [
+                  ...tabs,
+                  createChatTab(tab.chatId, summaryByChatId.get(tab.chatId)?.status ?? tab.status, {
+                    hasUnreadCompletion: tab.hasUnreadCompletion,
+                  }),
+                ];
+              }
+
+              if (tabs.some((entry) => entry.id === tab.id)) {
                 return tabs.map((entry) =>
-                  entry.chatId === tab.chatId
+                  isTerminalTab(entry) && entry.sessionId === tab.sessionId
                     ? {
                         ...entry,
-                        hasUnreadCompletion: entry.hasUnreadCompletion || tab.hasUnreadCompletion,
-                        status: summaryByChatId.get(tab.chatId)?.status ?? entry.status,
+                        status:
+                          current.terminalSessionsById[tab.sessionId]?.status ??
+                          workspace?.cachedTerminalSessionsById[tab.sessionId]?.status ??
+                          entry.status,
                       }
                     : entry,
                 );
@@ -566,15 +634,16 @@ export const useModexApp = (client: RemoteAppClient) => {
 
               return [
                 ...tabs,
-                {
-                  chatId: tab.chatId,
-                  hasUnreadCompletion: tab.hasUnreadCompletion,
-                  status: summaryByChatId.get(tab.chatId)?.status ?? tab.status,
-                },
+                createTerminalTab(
+                  tab.sessionId,
+                  current.terminalSessionsById[tab.sessionId]?.status ??
+                    workspace?.cachedTerminalSessionsById[tab.sessionId]?.status ??
+                    tab.status,
+                ),
               ];
             }, [])
-            .filter((tab) => summaryByChatId.has(tab.chatId));
-          const preservedOpenTabs = current.openTabs.filter((tab) => summaryByChatId.has(tab.chatId));
+            .filter((tab) => (isChatTab(tab) ? summaryByChatId.has(tab.chatId) : true));
+          const preservedOpenTabs = current.openTabs.filter((tab) => (isChatTab(tab) ? summaryByChatId.has(tab.chatId) : true));
           const nextOpenTabs =
             mergedOpenTabs.length > 0
               ? mergedOpenTabs
@@ -589,14 +658,18 @@ export const useModexApp = (client: RemoteAppClient) => {
           Object.values(mergedChatMap).forEach((thread) => {
             nextChatSettingsByChatId[thread.id] = inferSettings(thread, nextChatSettingsByChatId[thread.id]);
           });
-          const nextActiveChatId =
-            (current.activeChatId && summaryByChatId.has(current.activeChatId)
-              ? current.activeChatId
-              : activeChatId && summaryByChatId.has(activeChatId)
-                ? activeChatId
-                : nextOpenTabs[0]?.chatId ?? mergedChats[0]?.id ?? null);
+          const nextActiveTabId =
+            (current.activeTabId && nextOpenTabs.some((tab) => tab.id === current.activeTabId)
+              ? current.activeTabId
+              : workspace?.activeTabId && nextOpenTabs.some((tab) => tab.id === workspace.activeTabId)
+                ? workspace.activeTabId
+                : activeChatId && nextOpenTabs.some((tab) => tab.id === chatTabId(activeChatId))
+                  ? chatTabId(activeChatId)
+                  : nextOpenTabs[0]?.id ?? (mergedChats[0] ? chatTabId(mergedChats[0].id) : null));
+          const nextActiveChatId = activeChatIdForTab(nextActiveTabId, nextOpenTabs);
 
           return {
+            activeTabId: nextActiveTabId,
             activeChatId: nextActiveChatId,
             attachmentsByChatId: current.attachmentsByChatId,
             chatMap: mergedChatMap,
@@ -617,6 +690,10 @@ export const useModexApp = (client: RemoteAppClient) => {
             }, {}),
             loading: false,
             openTabs: nextOpenTabs,
+            terminalSessionsById: {
+              ...(workspace?.cachedTerminalSessionsById ?? {}),
+              ...current.terminalSessionsById,
+            },
           };
         });
       } catch (error) {
@@ -641,26 +718,74 @@ export const useModexApp = (client: RemoteAppClient) => {
   }), [client]);
 
   useEffect(() => {
+    const sessionIds = state.openTabs.flatMap((tab) => (isTerminalTab(tab) ? [tab.sessionId] : []));
+    if (sessionIds.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const refresh = async () => {
+      const results = await Promise.allSettled(sessionIds.map((sessionId) => terminalClient.getSession(sessionId)));
+      if (cancelled) {
+        return;
+      }
+
+      const sessions = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+      if (sessions.length === 0) {
+        return;
+      }
+
+      setState((current) => ({
+        ...current,
+        openTabs: sessions.reduce(
+          (tabs, session) => setTerminalTabStatusIfOpen(tabs, session.idHash, session.status),
+          current.openTabs,
+        ),
+        terminalSessionsById: sessions.reduce<Record<string, TerminalSessionSummary>>(
+          (accumulator, session) => ({
+            ...accumulator,
+            [session.idHash]: session,
+          }),
+          current.terminalSessionsById,
+        ),
+      }));
+    };
+
+    void refresh();
+    const intervalId = window.setInterval(() => {
+      void refresh();
+    }, 2_500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [state.openTabs, terminalClient]);
+
+  useEffect(() => {
     if (state.loading) {
       return;
     }
 
     saveWorkspaceSnapshot({
-      activeChatId: state.activeChatId,
+      activeTabId: state.activeTabId,
       cachedChats: state.chats,
       cachedThreadsByChatId: state.chatMap,
+      cachedTerminalSessionsById: state.terminalSessionsById,
       chatSettingsByChatId: state.chatSettingsByChatId,
       draftsByChatId: state.draftsByChatId,
-      openChatIds: state.openTabs.map((tab) => tab.chatId),
+      openTabs: state.openTabs,
     });
   }, [
-    state.activeChatId,
+    state.activeTabId,
     state.chatMap,
     state.chatSettingsByChatId,
     state.chats,
     state.draftsByChatId,
     state.loading,
     state.openTabs,
+    state.terminalSessionsById,
   ]);
 
   const setDraft = (value: string) => {
@@ -692,9 +817,10 @@ export const useModexApp = (client: RemoteAppClient) => {
   const activateChat = async (chatId: string) => {
     setState((current) => ({
       ...current,
+      activeTabId: chatTabId(chatId),
       activeChatId: chatId,
-      openTabs: setTabUnreadIfOpen(
-        ensureTab(current.openTabs, chatId, current.chats.find((chat) => chat.id === chatId)?.status ?? 'idle'),
+      openTabs: setChatTabUnreadIfOpen(
+        ensureChatWorkspaceTab(current.openTabs, chatId, current.chats.find((chat) => chat.id === chatId)?.status ?? 'idle'),
         chatId,
         false,
       ),
@@ -715,16 +841,53 @@ export const useModexApp = (client: RemoteAppClient) => {
     }
   };
 
-  const closeTab = (chatId: string) => {
+  const activateTerminalSession = async (sessionId: string) => {
     setState((current) => {
-      const openTabs = current.openTabs.filter((tab) => tab.chatId !== chatId);
-      const activeChatId =
-        current.activeChatId === chatId
-          ? openTabs[openTabs.length - 1]?.chatId ?? null
-          : current.activeChatId;
+      const openTabs = ensureTerminalWorkspaceTab(
+        current.openTabs,
+        sessionId,
+        current.terminalSessionsById[sessionId]?.status ?? 'starting',
+      );
+      return {
+        ...current,
+        activeChatId: null,
+        activeTabId: createTerminalTab(sessionId).id,
+        openTabs,
+      };
+    });
+
+    if (state.terminalSessionsById[sessionId]) {
+      return;
+    }
+
+    try {
+      const session = await terminalClient.getSession(sessionId);
+      setState((current) => ({
+        ...current,
+        error: null,
+        openTabs: setTerminalTabStatusIfOpen(current.openTabs, sessionId, session.status),
+        terminalSessionsById: {
+          ...current.terminalSessionsById,
+          [session.idHash]: session,
+        },
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : 'Unable to open tmuy session',
+      }));
+    }
+  };
+
+  const closeTab = (tabId: string) => {
+    setState((current) => {
+      const openTabs = current.openTabs.filter((tab) => tab.id !== tabId);
+      const activeTabId = current.activeTabId === tabId ? openTabs[openTabs.length - 1]?.id ?? null : current.activeTabId;
+      const activeChatId = activeChatIdForTab(activeTabId, openTabs);
 
       return {
         ...current,
+        activeTabId,
         activeChatId,
         openTabs,
       };
@@ -740,6 +903,7 @@ export const useModexApp = (client: RemoteAppClient) => {
       const thread = await client.createChat({ settings });
       setState((current) => ({
         ...current,
+        activeTabId: chatTabId(thread.id),
         activeChatId: thread.id,
         chatMap: {
           ...current.chatMap,
@@ -756,7 +920,7 @@ export const useModexApp = (client: RemoteAppClient) => {
         },
         error: null,
         liveActivityByChatId: clearLiveActivityForChat(current.liveActivityByChatId, thread.id),
-        openTabs: ensureTab(current.openTabs, thread.id, thread.status, {
+        openTabs: ensureChatWorkspaceTab(current.openTabs, thread.id, thread.status, {
           hasUnreadCompletion: false,
         }),
       }));
@@ -768,6 +932,45 @@ export const useModexApp = (client: RemoteAppClient) => {
       }));
       return null;
     }
+  };
+
+  const createTerminalSession = async (cwd: string) => {
+    if (state.loading) {
+      return null;
+    }
+
+    try {
+      const session = await terminalClient.createSession({ cwd });
+      setState((current) => ({
+        ...current,
+        activeChatId: null,
+        activeTabId: createTerminalTab(session.idHash).id,
+        error: null,
+        openTabs: ensureTerminalWorkspaceTab(current.openTabs, session.idHash, session.status),
+        terminalSessionsById: {
+          ...current.terminalSessionsById,
+          [session.idHash]: session,
+        },
+      }));
+      return session;
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : 'Unable to create tmuy session',
+      }));
+      return null;
+    }
+  };
+
+  const updateTerminalSession = (session: TerminalSessionSummary) => {
+    setState((current) => ({
+      ...current,
+      openTabs: setTerminalTabStatusIfOpen(current.openTabs, session.idHash, session.status),
+      terminalSessionsById: {
+        ...current.terminalSessionsById,
+        [session.idHash]: session,
+      },
+    }));
   };
 
   const setChatSettings = (chatId: string, settings: ChatRuntimeSettings) => {
@@ -818,8 +1021,8 @@ export const useModexApp = (client: RemoteAppClient) => {
     }
 
     const chatId = state.activeChatId;
-    const activeTab = state.openTabs.find((tab) => tab.chatId === chatId);
-    if (activeTab && isChatActiveStatus(activeTab.status)) {
+    const activeTab = state.openTabs.find((tab) => isChatTab(tab) && tab.chatId === chatId);
+    if (activeTab && isChatTab(activeTab) && isChatActiveStatus(activeTab.status)) {
       return;
     }
 
@@ -837,7 +1040,7 @@ export const useModexApp = (client: RemoteAppClient) => {
         ...current.liveActivityByChatId,
         [chatId]: [],
       },
-      openTabs: ensureTab(current.openTabs, chatId, 'running', {
+      openTabs: ensureChatWorkspaceTab(current.openTabs, chatId, 'running', {
         hasUnreadCompletion: false,
       }),
       draftsByChatId: {
@@ -892,7 +1095,7 @@ export const useModexApp = (client: RemoteAppClient) => {
           [chatId]: content,
         },
         liveActivityByChatId: clearLiveActivityForChat(current.liveActivityByChatId, chatId),
-        openTabs: setTabStatusIfOpen(current.openTabs, chatId, 'idle'),
+        openTabs: setChatTabStatusIfOpen(current.openTabs, chatId, 'idle'),
         chatMap: current.chatMap[chatId]
           ? {
               ...current.chatMap,
@@ -969,6 +1172,9 @@ export const useModexApp = (client: RemoteAppClient) => {
   };
 
   const activeChat = state.activeChatId ? state.chatMap[state.activeChatId] ?? null : null;
+  const activeTab = state.activeTabId ? state.openTabs.find((tab) => tab.id === state.activeTabId) ?? null : null;
+  const activeTerminalSession =
+    activeTab && isTerminalTab(activeTab) ? state.terminalSessionsById[activeTab.sessionId] ?? null : null;
   const activeAttachments = state.activeChatId ? state.attachmentsByChatId[state.activeChatId] ?? [] : [];
   const activeDraft = state.activeChatId ? state.draftsByChatId[state.activeChatId] ?? '' : '';
   const activeChatSettings = state.activeChatId ? state.chatSettingsByChatId[state.activeChatId] ?? null : null;
@@ -979,14 +1185,18 @@ export const useModexApp = (client: RemoteAppClient) => {
     () => ({
       ...state,
       activateChat,
+      activateTerminalSession,
       activeChat,
       activeAttachments,
       activeChatSettings,
       activeInteraction,
       activeLiveActivity,
+      activeTab,
+      activeTerminalSession,
       addAttachments,
       closeTab,
       createChat,
+      createTerminalSession,
       draft: activeDraft,
       interruptTurn,
       removeAttachment,
@@ -996,7 +1206,8 @@ export const useModexApp = (client: RemoteAppClient) => {
       setDraft,
       setDraftForChat,
       submitUserInput,
+      updateTerminalSession,
     }),
-    [activeChat, activeChatSettings, activeDraft, activeInteraction, activeLiveActivity, state],
+    [activeChat, activeChatSettings, activeDraft, activeInteraction, activeLiveActivity, activeTab, activeTerminalSession, state],
   );
 };

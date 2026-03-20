@@ -26,6 +26,7 @@ type Config struct {
 	AuthToken      string
 	Filesystem     FilesystemConfig
 	LogLevel       slog.Level
+	Terminal       TerminalConfig
 	Transcription  TranscriptionConfig
 }
 
@@ -48,6 +49,11 @@ type TranscriptionConfig struct {
 	UpstreamURL        string
 	UseServerVAD       bool
 	VADThreshold       float64
+}
+
+type TerminalConfig struct {
+	Binary string
+	Home   string
 }
 
 func Load() (Config, error) {
@@ -96,6 +102,10 @@ func Load() (Config, error) {
 			SearchMaxResults: searchMaxResults,
 		},
 		LogLevel: logLevel,
+		Terminal: TerminalConfig{
+			Binary: envStringAny([]string{"MODEX_TMUY_BIN"}, "tmuy"),
+			Home:   strings.TrimSpace(envStringAny([]string{"MODEX_TMUY_HOME"}, "")),
+		},
 		Transcription: TranscriptionConfig{
 			APIKey:             strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
 			Include:            splitCSVAny([]string{"MODEX_TRANSCRIPTION_INCLUDE"}),

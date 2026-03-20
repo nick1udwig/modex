@@ -2,17 +2,24 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { searchSummaries, searchThreadMessages } from './search';
 import { resolveSlashCommandState } from './slashCommands';
+import { chatTabId, isChatTab, isTerminalTab, terminalSessionPreview, terminalStatusLabel } from './tabs';
 import { isChatActiveStatus } from './chatStatus';
 import type { ApprovalPolicy, ChatRuntimeSettings, ChatStatus, ModelOption, PendingAttachment, ReasoningEffort } from './types';
 import { useRealtimeTranscription } from './useRealtimeTranscription';
 import { Composer } from '../components/Composer';
 import { ConversationView } from '../components/ConversationView';
 import { Icon } from '../components/Icon';
+import { NewTabSheet } from '../components/NewTabSheet';
 import { RuntimeSettingsSheet } from '../components/RuntimeSettingsSheet';
 import { Sidebar } from '../components/Sidebar';
+import { TerminalCreateSheet } from '../components/TerminalCreateSheet';
+import { TerminalFooter } from '../components/TerminalFooter';
+import { TerminalSessionPickerSheet } from '../components/TerminalSessionPickerSheet';
+import { TerminalView } from '../components/TerminalView';
 import { TabsBar } from '../components/TabsBar';
 import { createAppServerClient } from '../services/appServerClient';
 import { createSidecarFilesystemClient } from '../services/sidecarClient';
+import { createSidecarTerminalClient } from '../services/sidecarTerminalClient';
 import { useModexApp } from '../state/useModexApp';
 
 type Surface = 'chat' | 'tabs';
@@ -23,7 +30,7 @@ type CreateSheetOrigin = 'chat' | 'drawer' | 'tabs';
 
 interface PaneTransition {
   active: boolean;
-  chatId: string;
+  tabId: string;
   direction: 'opening' | 'closing';
   origin: TransitionOrigin;
   scaleX: number;
@@ -170,7 +177,8 @@ const playCompletionDing = () => {
 export const App = () => {
   const client = useMemo(() => createAppServerClient(), []);
   const filesystemClient = useMemo(() => createSidecarFilesystemClient(), []);
-  const modex = useModexApp(client);
+  const terminalClient = useMemo(() => createSidecarTerminalClient(), []);
+  const modex = useModexApp(client, terminalClient);
   const transcription = useRealtimeTranscription();
   const [surface, setSurface] = useState<Surface>('chat');
   const [drawerPhase, setDrawerPhase] = useState<DrawerPhase>('closed');
@@ -182,7 +190,10 @@ export const App = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>(FALLBACK_MODEL_OPTIONS);
+  const [newTabSheetOpen, setNewTabSheetOpen] = useState(false);
   const [settingsSheet, setSettingsSheet] = useState<SettingsSheetState>(CLOSED_SETTINGS_SHEET);
+  const [terminalCreateSheetOpen, setTerminalCreateSheetOpen] = useState(false);
+  const [terminalSessionPickerOpen, setTerminalSessionPickerOpen] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const footerActionNodeRef = useRef<HTMLButtonElement | null>(null);
   const drawerPanelRef = useRef<HTMLElement | null>(null);
@@ -194,9 +205,9 @@ export const App = () => {
   const frameIdsRef = useRef<number[]>([]);
   const previousTabSnapshotRef = useRef<Record<string, { hasUnreadCompletion: boolean; status: ChatStatus }>>({});
   const mountedRef = useRef(false);
-  const activeTab = modex.openTabs.find((tab) => tab.chatId === modex.activeChatId);
-  const isBusy = activeTab ? isChatActiveStatus(activeTab.status) : false;
-  const transitionChatId = paneTransition?.chatId ?? null;
+  const activeTab = modex.activeTab;
+  const isBusy = activeTab && isChatTab(activeTab) ? isChatActiveStatus(activeTab.status) : false;
+  const transitionTabId = paneTransition?.tabId ?? null;
   const liveDraft =
     transcription.session?.target === 'draft' && transcription.session.chatId === modex.activeChatId
       ? transcription.composedText
@@ -249,18 +260,28 @@ export const App = () => {
   useEffect(() => {
     const previousSnapshot = previousTabSnapshotRef.current;
     const nextSnapshot = Object.fromEntries(
-      modex.openTabs.map((tab) => [
-        tab.chatId,
-        {
-          hasUnreadCompletion: tab.hasUnreadCompletion,
-          status: tab.status,
-        },
-      ]),
+      modex.openTabs.flatMap((tab) =>
+        isChatTab(tab)
+          ? [
+              [
+                tab.chatId,
+                {
+                  hasUnreadCompletion: tab.hasUnreadCompletion,
+                  status: tab.status,
+                },
+              ] satisfies [string, { hasUnreadCompletion: boolean; status: ChatStatus }],
+            ]
+          : [],
+      ),
     );
 
     if (mountedRef.current) {
       const completedTab = modex.openTabs.find(
-        (tab) => previousSnapshot[tab.chatId] && isChatActiveStatus(previousSnapshot[tab.chatId].status) && tab.status === 'idle',
+        (tab) =>
+          isChatTab(tab) &&
+          previousSnapshot[tab.chatId] &&
+          isChatActiveStatus(previousSnapshot[tab.chatId].status) &&
+          tab.status === 'idle',
       );
       if (completedTab) {
         playCompletionDing();
@@ -284,6 +305,7 @@ export const App = () => {
   );
 
   useEffect(() => () => filesystemClient.close(), [filesystemClient]);
+  useEffect(() => () => terminalClient.close(), [terminalClient]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -373,13 +395,13 @@ export const App = () => {
     }, delay);
   };
 
-  const registerTabNode = (chatId: string, node: HTMLButtonElement | null) => {
+  const registerTabNode = (tabId: string, node: HTMLButtonElement | null) => {
     if (node) {
-      tabNodeMapRef.current.set(chatId, node);
+      tabNodeMapRef.current.set(tabId, node);
       return;
     }
 
-    tabNodeMapRef.current.delete(chatId);
+    tabNodeMapRef.current.delete(tabId);
   };
 
   const registerFooterActionNode = (node: HTMLButtonElement | null) => {
@@ -397,7 +419,7 @@ export const App = () => {
     options?: {
       clampToStage?: boolean;
     },
-  ): Omit<PaneTransition, 'active' | 'chatId' | 'direction' | 'origin'> | null => {
+  ): Omit<PaneTransition, 'active' | 'tabId' | 'direction' | 'origin'> | null => {
     const stageRect = getStageRect();
     if (!stageRect || stageRect.width === 0 || stageRect.height === 0) {
       return null;
@@ -588,9 +610,9 @@ export const App = () => {
     animateDrawerClosed();
   };
 
-  const runChatExpandTransition = (
-    chatId: string,
-    transform: Omit<PaneTransition, 'active' | 'chatId' | 'direction' | 'origin'> | null,
+  const runTabExpandTransition = (
+    tabId: string,
+    transform: Omit<PaneTransition, 'active' | 'tabId' | 'direction' | 'origin'> | null,
     origin: TransitionOrigin,
   ) => {
     setSurface('chat');
@@ -602,7 +624,7 @@ export const App = () => {
     setPaneTransition({
       ...transform,
       active: false,
-      chatId,
+      tabId,
       direction: 'closing',
       origin,
     });
@@ -653,7 +675,33 @@ export const App = () => {
       return;
     }
 
-    runChatExpandTransition(thread.id, transform, 'footer-action');
+    runTabExpandTransition(chatTabId(thread.id), transform, 'footer-action');
+  };
+
+  const createTerminalFromTabs = async (cwd: string) => {
+    if (paneTransition || surface !== 'tabs') {
+      return;
+    }
+
+    commitTranscription();
+    const transform = getTransformFromNode(footerActionNodeRef.current, { clampToStage: true });
+    const session = await modex.createTerminalSession(cwd);
+    if (!session) {
+      return;
+    }
+
+    runTabExpandTransition(`terminal:${session.idHash}`, transform, 'footer-action');
+  };
+
+  const connectTerminalFromTabs = async (sessionId: string) => {
+    if (paneTransition || surface !== 'tabs') {
+      return;
+    }
+
+    commitTranscription();
+    const transform = getTransformFromNode(footerActionNodeRef.current, { clampToStage: true });
+    await modex.activateTerminalSession(sessionId);
+    runTabExpandTransition(`terminal:${sessionId}`, transform, 'footer-action');
   };
 
   const openTabs = () => {
@@ -664,15 +712,15 @@ export const App = () => {
     commitTranscription();
     closeDrawer();
 
-    const chatId = modex.activeChatId ?? modex.openTabs[0]?.chatId;
-    if (!chatId) {
+    const tabId = modex.activeTabId ?? modex.openTabs[0]?.id;
+    if (!tabId) {
       setSurface('tabs');
       return;
     }
 
     setPaneTransition({
       active: false,
-      chatId,
+      tabId,
       direction: 'opening',
       origin: 'tab',
       scaleX: 1,
@@ -682,7 +730,7 @@ export const App = () => {
     });
 
     scheduleFrame(() => {
-      const transform = getTransformFromNode(tabNodeMapRef.current.get(chatId));
+      const transform = getTransformFromNode(tabNodeMapRef.current.get(tabId));
       if (!transform) {
         setPaneTransition(null);
         setSurface('tabs');
@@ -692,7 +740,7 @@ export const App = () => {
       setPaneTransition({
         ...transform,
         active: false,
-        chatId,
+        tabId,
         direction: 'opening',
         origin: 'tab',
       });
@@ -708,15 +756,22 @@ export const App = () => {
     });
   };
 
-  const openChatFromTab = (chatId: string) => {
+  const openTabFromTabs = (tabId: string) => {
     if (paneTransition) {
       return;
     }
 
     commitTranscription();
     closeDrawer();
-    void modex.activateChat(chatId);
-    runChatExpandTransition(chatId, getTransformFromNode(tabNodeMapRef.current.get(chatId)), 'tab');
+
+    if (tabId.startsWith('chat:')) {
+      const chatId = tabId.slice('chat:'.length);
+      void modex.activateChat(chatId);
+    } else if (tabId.startsWith('terminal:')) {
+      void modex.activateTerminalSession(tabId.slice('terminal:'.length));
+    }
+
+    runTabExpandTransition(tabId, getTransformFromNode(tabNodeMapRef.current.get(tabId)), 'tab');
   };
 
   const seedSettings = (): ChatRuntimeSettings => {
@@ -724,13 +779,14 @@ export const App = () => {
       return cloneSettings(modex.activeChatSettings);
     }
 
-    if (modex.activeChat?.cwd) {
+    const baseRoot = modex.activeChat?.cwd ?? modex.activeTerminalSession?.cwd ?? '';
+    if (baseRoot) {
       return {
         accessMode: 'workspace-write',
         approvalPolicy: selectedApprovalPolicy,
         model: defaultModel.id,
         reasoningEffort: selectedReasoningEffort,
-        roots: [modex.activeChat.cwd],
+        roots: [baseRoot],
       };
     }
 
@@ -745,12 +801,32 @@ export const App = () => {
 
   const requestCreateChat = (origin: CreateSheetOrigin) => {
     commitTranscription();
+    setNewTabSheetOpen(false);
     setSettingsSheet({
       mode: 'create',
       open: true,
       origin,
       settings: seedSettings(),
     });
+  };
+
+  const requestNewTab = () => {
+    commitTranscription(false);
+    setTerminalCreateSheetOpen(false);
+    setTerminalSessionPickerOpen(false);
+    setNewTabSheetOpen(true);
+  };
+
+  const requestNewTerminal = () => {
+    setNewTabSheetOpen(false);
+    setTerminalSessionPickerOpen(false);
+    setTerminalCreateSheetOpen(true);
+  };
+
+  const requestExistingTerminal = () => {
+    setNewTabSheetOpen(false);
+    setTerminalCreateSheetOpen(false);
+    setTerminalSessionPickerOpen(true);
   };
 
   const requestEditDirectories = () => {
@@ -929,6 +1005,33 @@ export const App = () => {
     await createChat(settings);
   };
 
+  const submitTerminalCreateSheet = async (cwd: string) => {
+    setTerminalCreateSheetOpen(false);
+    if (!cwd) {
+      return;
+    }
+
+    if (surface === 'tabs') {
+      await createTerminalFromTabs(cwd);
+      return;
+    }
+
+    await modex.createTerminalSession(cwd);
+    setSurface('chat');
+  };
+
+  const handleTerminalSessionSelect = async (sessionId: string) => {
+    setTerminalSessionPickerOpen(false);
+
+    if (surface === 'tabs') {
+      await connectTerminalFromTabs(sessionId);
+      return;
+    }
+
+    await modex.activateTerminalSession(sessionId);
+    setSurface('chat');
+  };
+
   const showRunningBadge = Boolean(isBusy);
   const showTabsPane = surface === 'tabs' || paneTransition !== null;
   const showChatPane = surface === 'chat' || paneTransition !== null;
@@ -989,15 +1092,30 @@ export const App = () => {
     () => searchSummaries(modex.chats, effectiveChatsSearchQuery),
     [effectiveChatsSearchQuery, modex.chats],
   );
-  const tabsSearch = useMemo(
+  const tabsSearchEntries = useMemo(
     () =>
-      searchSummaries(
-        modex.openTabs
-          .map((tab) => modex.chats.find((chat) => chat.id === tab.chatId))
-          .filter((chat): chat is NonNullable<typeof chat> => Boolean(chat)),
-        effectiveTabsSearchQuery,
-      ),
-    [effectiveTabsSearchQuery, modex.chats, modex.openTabs],
+      modex.openTabs.flatMap((tab) => {
+        if (isChatTab(tab)) {
+          const chat = modex.chats.find((entry) => entry.id === tab.chatId);
+          return chat ? [{ id: tab.id, preview: chat.preview, title: chat.title }] : [];
+        }
+
+        const session = modex.terminalSessionsById[tab.sessionId];
+        return session
+          ? [
+              {
+                id: tab.id,
+                preview: terminalSessionPreview(session),
+                title: session.currentName,
+              },
+            ]
+          : [];
+      }),
+    [modex.chats, modex.openTabs, modex.terminalSessionsById],
+  );
+  const tabsSearch = useMemo(
+    () => searchSummaries(tabsSearchEntries, effectiveTabsSearchQuery),
+    [effectiveTabsSearchQuery, tabsSearchEntries],
   );
 
   useEffect(() => {
@@ -1010,11 +1128,11 @@ export const App = () => {
 
   const visibleChats =
     effectiveChatsSearchQuery.trim().length > 0
-      ? modex.chats.filter((chat) => chatsSearch.some((result) => result.chatId === chat.id))
+      ? modex.chats.filter((chat) => chatsSearch.some((result) => result.id === chat.id))
       : modex.chats;
   const visibleTabs =
     effectiveTabsSearchQuery.trim().length > 0
-      ? modex.openTabs.filter((tab) => tabsSearch.some((result) => result.chatId === tab.chatId))
+      ? modex.openTabs.filter((tab) => tabsSearch.some((result) => result.id === tab.id))
       : modex.openTabs;
 
   useEffect(() => {
@@ -1053,11 +1171,11 @@ export const App = () => {
   const normalizedSearchIndex = searchTotal === 0 ? 0 : searchIndex % searchTotal;
   const activeSearchHitId =
     searchContext === 'chat' ? chatSearch.hitOrder[normalizedSearchIndex]?.anchorId ?? null : null;
-  const selectedSearchChatId =
+  const selectedSearchId =
     searchContext === 'chats'
-      ? chatsSearch[normalizedSearchIndex]?.chatId ?? null
+      ? chatsSearch[normalizedSearchIndex]?.id ?? null
       : searchContext === 'tabs'
-        ? tabsSearch[normalizedSearchIndex]?.chatId ?? null
+        ? tabsSearch[normalizedSearchIndex]?.id ?? null
         : null;
   const searchHitLabel = searchActive ? `${searchTotal === 0 ? 0 : normalizedSearchIndex + 1}/${searchTotal}` : null;
 
@@ -1074,6 +1192,7 @@ export const App = () => {
     return Object.values(modex.chatSettingsByChatId)
       .flatMap((settings) => settings.roots)
       .concat(modex.activeChat?.cwd ? [modex.activeChat.cwd] : [])
+      .concat(Object.values(modex.terminalSessionsById).flatMap((session) => (session.cwd ? [session.cwd] : [])))
       .filter((root) => {
         if (seen.has(root)) {
           return false;
@@ -1082,7 +1201,12 @@ export const App = () => {
         seen.add(root);
         return true;
       });
-  }, [modex.activeChat?.cwd, modex.chatSettingsByChatId]);
+  }, [modex.activeChat?.cwd, modex.chatSettingsByChatId, modex.terminalSessionsById]);
+  const contentTitle =
+    activeTab && isTerminalTab(activeTab) ? modex.activeTerminalSession?.currentName ?? 'tmuy Terminal' : 'Modex Auto';
+  const terminalFooterLabel =
+    modex.activeTerminalSession ? terminalStatusLabel(modex.activeTerminalSession.status) : 'Terminal session';
+  const showComposer = composerSurface === 'tabs' || !activeTab || isChatTab(activeTab);
 
   return (
     <div className="app-shell">
@@ -1113,14 +1237,15 @@ export const App = () => {
                   <TabsBar
                     tabs={visibleTabs}
                     chats={modex.chats}
-                    activeChatId={modex.activeChatId}
-                    maskedChatId={transitionChatId}
-                    onActivate={openChatFromTab}
+                    activeTabId={modex.activeTabId}
+                    maskedTabId={transitionTabId}
+                    onActivate={openTabFromTabs}
                     onClose={modex.closeTab}
                     onOpenChats={openDrawer}
                     registerTabNode={registerTabNode}
                     searchQuery={effectiveTabsSearchQuery}
-                    selectedSearchChatId={selectedSearchChatId}
+                    selectedSearchTabId={searchContext === 'tabs' ? selectedSearchId : null}
+                    terminalSessionsById={modex.terminalSessionsById}
                   />
                 </div>
               ) : null}
@@ -1153,7 +1278,7 @@ export const App = () => {
                       </button>
 
                       <span className="chat-header__dot" aria-hidden="true" />
-                      <span className="chat-header__title">Modex Auto</span>
+                      <span className="chat-header__title">{contentTitle}</span>
 
                       {showRunningBadge ? (
                         <span className="chat-header__badge">
@@ -1168,19 +1293,23 @@ export const App = () => {
                     </button>
                   </header>
 
-                  <ConversationView
-                    activeSearchHitId={activeSearchHitId}
-                    busy={Boolean(isBusy)}
-                    chat={modex.activeChat}
-                    liveActivity={modex.activeLiveActivity}
-                    loading={modex.loading}
-                    modelOptions={modelOptions}
-                    onSelectModel={applyModelSelection}
-                    onSelectReasoningEffort={applyReasoningEffort}
-                    searchQuery={effectiveChatSearchQuery}
-                    selectedModelId={selectedModelId}
-                    selectedReasoningEffort={selectedReasoningEffort}
-                  />
+                  {activeTab && isTerminalTab(activeTab) ? (
+                    <TerminalView session={modex.activeTerminalSession} onSessionUpdate={modex.updateTerminalSession} />
+                  ) : (
+                    <ConversationView
+                      activeSearchHitId={activeSearchHitId}
+                      busy={Boolean(isBusy)}
+                      chat={modex.activeChat}
+                      liveActivity={modex.activeLiveActivity}
+                      loading={modex.loading}
+                      modelOptions={modelOptions}
+                      onSelectModel={applyModelSelection}
+                      onSelectReasoningEffort={applyReasoningEffort}
+                      searchQuery={effectiveChatSearchQuery}
+                      selectedModelId={selectedModelId}
+                      selectedReasoningEffort={selectedReasoningEffort}
+                    />
+                  )}
                 </div>
               ) : null}
 
@@ -1200,61 +1329,66 @@ export const App = () => {
                   onSelectChat={(chatId) => void openChat(chatId)}
                   registerPanel={registerDrawerPanel}
                   searchQuery={effectiveChatsSearchQuery}
-                  selectedSearchChatId={selectedSearchChatId}
+                  selectedSearchChatId={searchContext === 'chats' ? selectedSearchId : null}
                 />
               ) : null}
             </div>
           </main>
 
-          <Composer
-            accessMode={modex.activeChatSettings?.accessMode ?? null}
-            attachments={modex.activeAttachments}
-            busy={Boolean(isBusy)}
-            draft={liveDraft}
-            error={attachmentError ?? transcription.error ?? modex.error}
-            footerAction={composerSurface === 'tabs' ? 'new-tab' : 'tabs'}
-            inputDisabled={transcription.active}
-            interactionRequest={modex.activeInteraction}
-            maskFooterAction={paneTransition?.origin === 'footer-action'}
-            onAttachFiles={(files) => void handleAttachmentSelection(files)}
-            onApprovalDecision={(decision) => void modex.respondToApproval(decision)}
-            onCloseSearch={() => {
-              commitTranscription(false);
-              setSearchActive(false);
-              setSearchIndex(0);
-              setSearchQuery('');
-            }}
-            onCreateChat={() => requestCreateChat(surface === 'tabs' ? 'tabs' : 'chat')}
-            onDraftChange={modex.setDraft}
-            onEditDirectories={requestEditDirectories}
-            onOpenSearch={() => {
-              commitTranscription();
-              setSearchActive(true);
-            }}
-            onOpenTabs={openTabs}
-            onRemoveAttachment={(attachmentId) => {
-              if (modex.activeChatId) {
-                modex.removeAttachment(modex.activeChatId, attachmentId);
-              }
-            }}
-            onSearchNext={() => stepSearch(1)}
-            onSearchPrevious={() => stepSearch(-1)}
-            onSearchQueryChange={setSearchQuery}
-            onSend={() => void modex.sendMessage()}
-            onExecuteSlashCommand={(suggestion) => void executeSlashCommand(suggestion)}
-            onStopRun={() => void modex.interruptTurn()}
-            onSubmitUserInput={(answers) => void modex.submitUserInput(answers)}
-            onToggleVoiceInput={toggleVoiceInput}
-            onToggleAccessMode={applyAccessMode}
-            openTabCount={modex.openTabs.length}
-            recording={transcription.active}
-            recordingStatus={transcription.session?.status ?? null}
-            registerFooterActionNode={registerFooterActionNode}
-            searchActive={searchActive}
-            searchHitLabel={searchHitLabel}
-            searchQuery={liveSearchQuery}
-            slashCommands={slashCommandState?.suggestions ?? []}
-          />
+          {showComposer ? (
+            <Composer
+              accessMode={modex.activeChatSettings?.accessMode ?? null}
+              attachments={modex.activeAttachments}
+              busy={Boolean(isBusy)}
+              draft={liveDraft}
+              error={attachmentError ?? transcription.error ?? modex.error}
+              footerAction={composerSurface === 'tabs' ? 'new-tab' : 'tabs'}
+              inputDisabled={transcription.active}
+              interactionRequest={modex.activeInteraction}
+              maskFooterAction={paneTransition?.origin === 'footer-action'}
+              mode={composerSurface === 'tabs' ? 'tabs' : 'chat'}
+              onAttachFiles={(files) => void handleAttachmentSelection(files)}
+              onApprovalDecision={(decision) => void modex.respondToApproval(decision)}
+              onCloseSearch={() => {
+                commitTranscription(false);
+                setSearchActive(false);
+                setSearchIndex(0);
+                setSearchQuery('');
+              }}
+              onCreateChat={requestNewTab}
+              onDraftChange={modex.setDraft}
+              onEditDirectories={requestEditDirectories}
+              onOpenSearch={() => {
+                commitTranscription();
+                setSearchActive(true);
+              }}
+              onOpenTabs={openTabs}
+              onRemoveAttachment={(attachmentId) => {
+                if (modex.activeChatId) {
+                  modex.removeAttachment(modex.activeChatId, attachmentId);
+                }
+              }}
+              onSearchNext={() => stepSearch(1)}
+              onSearchPrevious={() => stepSearch(-1)}
+              onSearchQueryChange={setSearchQuery}
+              onSend={() => void modex.sendMessage()}
+              onExecuteSlashCommand={(suggestion) => void executeSlashCommand(suggestion)}
+              onStopRun={() => void modex.interruptTurn()}
+              onSubmitUserInput={(answers) => void modex.submitUserInput(answers)}
+              onToggleVoiceInput={toggleVoiceInput}
+              onToggleAccessMode={applyAccessMode}
+              openTabCount={modex.openTabs.length}
+              recording={transcription.active}
+              recordingStatus={transcription.session?.status ?? null}
+              registerFooterActionNode={registerFooterActionNode}
+              searchActive={searchActive}
+              searchHitLabel={searchHitLabel}
+              searchQuery={liveSearchQuery}
+              slashCommands={slashCommandState?.suggestions ?? []}
+            />
+          ) : (
+            <TerminalFooter openTabCount={modex.openTabs.length} onOpenTabs={openTabs} statusLabel={terminalFooterLabel} />
+          )}
         </div>
 
         <RuntimeSettingsSheet
@@ -1265,6 +1399,25 @@ export const App = () => {
           settings={settingsSheet.open ? settingsSheet.settings : seedSettings()}
           onClose={() => setSettingsSheet(CLOSED_SETTINGS_SHEET)}
           onSubmit={(settings) => void submitSettingsSheet(settings)}
+        />
+        <NewTabSheet
+          open={newTabSheetOpen}
+          onClose={() => setNewTabSheetOpen(false)}
+          onOpenExistingTerminal={requestExistingTerminal}
+          onOpenNewChat={() => requestCreateChat('tabs')}
+          onOpenNewTerminal={requestNewTerminal}
+        />
+        <TerminalCreateSheet
+          open={terminalCreateSheetOpen}
+          recentRoots={recentRoots}
+          onClose={() => setTerminalCreateSheetOpen(false)}
+          onSubmit={(cwd) => void submitTerminalCreateSheet(cwd)}
+        />
+        <TerminalSessionPickerSheet
+          client={terminalClient}
+          open={terminalSessionPickerOpen}
+          onClose={() => setTerminalSessionPickerOpen(false)}
+          onSelect={(sessionId) => void handleTerminalSessionSelect(sessionId)}
         />
       </div>
     </div>

@@ -1,4 +1,5 @@
 export type ChatStatus = 'idle' | 'running' | 'waiting-approval' | 'waiting-input';
+export type TerminalSessionStatus = 'starting' | 'live' | 'exited' | 'failed';
 export type AccessMode = 'read-only' | 'workspace-write';
 export type ApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never';
 export type JsonRpcId = number | string;
@@ -43,10 +44,35 @@ export interface ChatThread extends ChatSummary {
 }
 
 export interface ChatTab {
+  id: string;
+  kind: 'chat';
   chatId: string;
   hasUnreadCompletion: boolean;
   status: ChatStatus;
 }
+
+export interface TerminalSessionSummary {
+  createdAt: string;
+  cwd: string;
+  currentName: string;
+  detachKey: string;
+  exitCode: number | null;
+  idHash: string;
+  logPath: string;
+  socketPath: string;
+  startedName: string;
+  status: TerminalSessionStatus;
+  updatedAt: string;
+}
+
+export interface TerminalTab {
+  id: string;
+  kind: 'terminal';
+  sessionId: string;
+  status: TerminalSessionStatus;
+}
+
+export type WorkspaceTab = ChatTab | TerminalTab;
 
 export interface ChatRuntimeSettings {
   accessMode: AccessMode;
@@ -58,6 +84,10 @@ export interface ChatRuntimeSettings {
 
 export interface CreateChatPayload {
   settings?: ChatRuntimeSettings;
+}
+
+export interface CreateTerminalSessionPayload {
+  cwd: string;
 }
 
 export interface PendingAttachment {
@@ -203,4 +233,10 @@ export interface RemoteAppClient {
   respondToApproval(request: ApprovalRequest, decision: ApprovalDecision): Promise<void>;
   submitUserInput(request: UserInputRequest, answers: Record<string, string[]>): Promise<void>;
   subscribe(listener: (event: RemoteThreadEvent) => void): () => void;
+}
+
+export interface RemoteTerminalClient {
+  createSession(payload: CreateTerminalSessionPayload): Promise<TerminalSessionSummary>;
+  getSession(sessionId: string): Promise<TerminalSessionSummary>;
+  listSessions(): Promise<TerminalSessionSummary[]>;
 }
