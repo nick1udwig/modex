@@ -486,4 +486,26 @@ test('shouldHoldIdleStatusUntilThreadSync keeps live stacks visible until the fi
     ),
     false,
   );
+
+  assert.equal(
+    shouldHoldIdleStatusUntilThreadSync(
+      {
+        messages: [],
+        status: 'waiting-approval',
+      },
+      [
+        {
+          detail: 'Waiting for approval',
+          id: 'entry-2',
+          kind: 'commentary',
+          status: 'in-progress',
+          summary: 'Waiting for approval',
+          title: 'Approval',
+          turnId: 'turn-3',
+        },
+      ],
+      'idle',
+    ),
+    true,
+  );
 });

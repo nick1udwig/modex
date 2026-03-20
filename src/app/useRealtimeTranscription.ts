@@ -48,6 +48,10 @@ interface RawTranscriptionEvent {
   type?: string;
 }
 
+export const shouldHoldTranscriptionWakeLock = (
+  status: ActiveTranscriptionSession['status'] | null | undefined,
+) => status === 'connecting' || status === 'recording' || status === 'processing';
+
 const PREFERRED_AUDIO_CONTEXT_SAMPLE_RATE = 24_000;
 const MIN_AUDIO_COMMIT_MS = 100;
 const TRANSCRIPTION_DRAIN_IDLE_MS = 2_000;
@@ -226,7 +230,7 @@ export const useRealtimeTranscription = () => {
   );
 
   useEffect(() => {
-    if (session?.status !== 'connecting' && session?.status !== 'recording') {
+    if (!shouldHoldTranscriptionWakeLock(session?.status)) {
       releaseWakeLock();
       return;
     }
@@ -264,7 +268,6 @@ export const useRealtimeTranscription = () => {
 
     drainingRef.current = true;
     publishCompletedResultRef.current = publishResult;
-    releaseWakeLock();
     teardownAudioRefs({
       audioContextRef,
       gainNodeRef,

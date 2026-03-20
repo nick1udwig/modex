@@ -29,7 +29,7 @@ interface RawWorkspaceSnapshot {
 }
 
 const STORAGE_KEY = 'modex.workspace.v1';
-const VALID_CHAT_STATUSES = new Set<ChatStatus>(['idle', 'running']);
+const VALID_CHAT_STATUSES = new Set<ChatStatus>(['idle', 'running', 'waiting-approval', 'waiting-input']);
 const VALID_MESSAGE_ROLES = new Set<MessageRole>(['assistant', 'system', 'user']);
 const VALID_ACTIVITY_KINDS = new Set<ActivityKind>(['command', 'commentary', 'file-change', 'plan', 'reasoning']);
 const VALID_ACTIVITY_STATUSES = new Set<ActivityStatus>(['completed', 'failed', 'in-progress']);

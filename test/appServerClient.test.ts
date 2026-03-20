@@ -276,6 +276,26 @@ test('mapThreadSummary prefers explicit thread names and running status', () => 
   );
 });
 
+test('mapThreadSummary preserves approval and input wait states from active flags', () => {
+  assert.equal(
+    mapThreadSummary(
+      makeRawThread({
+        status: { type: 'active', activeFlags: ['waitingOnApproval'] },
+      }),
+    ).status,
+    'waiting-approval',
+  );
+
+  assert.equal(
+    mapThreadSummary(
+      makeRawThread({
+        status: { type: 'active', activeFlags: ['waitingOnUserInput'] },
+      }),
+    ).status,
+    'waiting-input',
+  );
+});
+
 test('mapThreadSummary uses the latest visible message for preview', () => {
   assert.equal(
     mapThreadSummary({
@@ -791,6 +811,50 @@ test('getChat downgrades cached running threads when the backend no longer has t
       (event) => event.type === 'thread' && ((event.thread as { status?: string } | undefined)?.status ?? null) === 'idle',
     ),
   );
+});
+
+test('getChat resumes threads that are waiting on approval so the request can be replayed', async () => {
+  const client = new AppServerClient({ url: 'ws://localhost:4222' });
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const waitingThread = makeRawThread({
+    id: 'chat-approval',
+    status: { type: 'active', activeFlags: ['waitingOnApproval'] },
+    turns: [{ id: 'turn-approval', items: [], status: 'inProgress' }],
+  });
+
+  (client as any).ensureConnection = async () => ({
+    request: async (method: string, params: unknown) => {
+      requests.push({ method, params });
+      if (method === 'thread/read') {
+        return { thread: waitingThread };
+      }
+
+      if (method === 'thread/resume') {
+        return { thread: waitingThread };
+      }
+
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+
+  const thread = await client.getChat('chat-approval');
+
+  assert.equal(thread.status, 'waiting-approval');
+  assert.deepEqual(requests, [
+    {
+      method: 'thread/read',
+      params: {
+        includeTurns: true,
+        threadId: 'chat-approval',
+      },
+    },
+    {
+      method: 'thread/resume',
+      params: {
+        threadId: 'chat-approval',
+      },
+    },
+  ]);
 });
 
 test('foreground resume forces a reconnect when a running thread may be stale', () => {
