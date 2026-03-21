@@ -16,8 +16,9 @@ import { Sidebar } from '../components/Sidebar';
 import { TerminalCreateSheet } from '../components/TerminalCreateSheet';
 import { TerminalFooter } from '../components/TerminalFooter';
 import { TerminalSessionPickerSheet } from '../components/TerminalSessionPickerSheet';
-import { TerminalView } from '../components/TerminalView';
+import { TerminalView, type TerminalViewHandle } from '../components/TerminalView';
 import { TabsBar } from '../components/TabsBar';
+import { getTerminalShortcutSequence, type TerminalModifierState } from '../components/terminalInputModel';
 import { createAppServerClient } from '../services/appServerClient';
 import { createSidecarFilesystemClient } from '../services/sidecarClient';
 import { createSidecarTerminalClient } from '../services/sidecarTerminalClient';
@@ -74,6 +75,7 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 const CLOSED_SETTINGS_SHEET: SettingsSheetState = { open: false };
 const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = 'on-request';
 const DEFAULT_REASONING_EFFORTS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const DEFAULT_TERMINAL_MODIFIERS: TerminalModifierState = { alt: false, ctrl: false };
 const FALLBACK_MODEL_OPTIONS: ModelOption[] = [
   {
     defaultReasoningEffort: 'xhigh',
@@ -194,14 +196,16 @@ export const App = () => {
   const [newTabSheetOpen, setNewTabSheetOpen] = useState(false);
   const [settingsSheet, setSettingsSheet] = useState<SettingsSheetState>(CLOSED_SETTINGS_SHEET);
   const [terminalCreateSheetOpen, setTerminalCreateSheetOpen] = useState(false);
+  const [terminalModifierState, setTerminalModifierState] = useState<TerminalModifierState>(DEFAULT_TERMINAL_MODIFIERS);
   const [terminalSessionPickerOpen, setTerminalSessionPickerOpen] = useState(false);
-  const [wideShell, setWideShell] = useState(() => shouldUseWideShell(readViewportSize()));
+  const [viewportSize, setViewportSize] = useState(() => readViewportSize());
   const stageRef = useRef<HTMLDivElement | null>(null);
   const footerActionNodeRef = useRef<HTMLButtonElement | null>(null);
   const drawerPanelRef = useRef<HTMLElement | null>(null);
   const drawerGestureRef = useRef<DrawerGesture | null>(null);
   const drawerProgressRef = useRef(0);
   const drawerTimeoutIdRef = useRef<number | null>(null);
+  const terminalViewRef = useRef<TerminalViewHandle | null>(null);
   const tabNodeMapRef = useRef(new Map<string, HTMLButtonElement>());
   const timeoutIdsRef = useRef<number[]>([]);
   const frameIdsRef = useRef<number[]>([]);
@@ -259,15 +263,22 @@ export const App = () => {
     setAttachmentError(null);
   }, [modex.activeChatId]);
 
+  const wideShell = shouldUseWideShell(viewportSize);
+
   useEffect(() => {
-    const syncWideShell = () => {
-      setWideShell(shouldUseWideShell(readViewportSize()));
+    const syncViewport = () => {
+      setViewportSize(readViewportSize());
     };
 
-    syncWideShell();
-    window.addEventListener('resize', syncWideShell);
+    const visualViewport = window.visualViewport;
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    visualViewport?.addEventListener('resize', syncViewport);
+    visualViewport?.addEventListener('scroll', syncViewport);
     return () => {
-      window.removeEventListener('resize', syncWideShell);
+      window.removeEventListener('resize', syncViewport);
+      visualViewport?.removeEventListener('resize', syncViewport);
+      visualViewport?.removeEventListener('scroll', syncViewport);
     };
   }, []);
 
@@ -1083,6 +1094,14 @@ export const App = () => {
       return;
     }
 
+    if (activeTab && isTerminalTab(activeTab)) {
+      void transcription.start({
+        baseText: '',
+        target: 'terminal',
+      });
+      return;
+    }
+
     if (!modex.activeChatId) {
       return;
     }
@@ -1163,12 +1182,42 @@ export const App = () => {
   }, [modex.activeChatId, transcription.session]);
 
   useEffect(() => {
+    const activeSession = transcription.session;
+    if (!activeSession || activeSession.target !== 'terminal') {
+      return;
+    }
+
+    if (activeTab && isTerminalTab(activeTab)) {
+      return;
+    }
+
+    commitTranscription(false);
+  }, [activeTab, transcription.session]);
+
+  useEffect(() => {
+    if (!activeTab || !isTerminalTab(activeTab) || !searchActive) {
+      return;
+    }
+
+    commitTranscription(false);
+    setSearchActive(false);
+    setSearchIndex(0);
+    setSearchQuery('');
+  }, [activeTab, searchActive]);
+
+  useEffect(() => {
+    setTerminalModifierState(DEFAULT_TERMINAL_MODIFIERS);
+  }, [modex.activeTabId]);
+
+  useEffect(() => {
     if (!completedTranscription) {
       return;
     }
 
     if (completedTranscription.target === 'search') {
       setSearchQuery(completedTranscription.text);
+    } else if (completedTranscription.target === 'terminal') {
+      terminalViewRef.current?.sendInput(completedTranscription.text);
     } else if (completedTranscription.chatId) {
       modex.setDraftForChat(completedTranscription.chatId, completedTranscription.text);
     }
@@ -1218,12 +1267,12 @@ export const App = () => {
   }, [modex.activeChat?.cwd, modex.chatSettingsByChatId, modex.terminalSessionsById]);
   const contentTitle =
     activeTab && isTerminalTab(activeTab) ? modex.activeTerminalSession?.currentName ?? 'tmuy Terminal' : 'Modex Auto';
-  const terminalFooterLabel =
-    modex.activeTerminalSession ? terminalStatusLabel(modex.activeTerminalSession.status) : 'Terminal session';
+  const terminalRecording = transcription.active && transcription.session?.target === 'terminal';
+  const terminalRecordingStatus = transcription.session?.target === 'terminal' ? transcription.session.status : null;
   const showComposer = composerSurface === 'tabs' || !activeTab || isChatTab(activeTab);
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={{ '--app-height': `${viewportSize.height}px` } as CSSProperties}>
       <div className={`mobile-shell ${wideShell ? 'mobile-shell--wide' : ''}`}>
         <div className="workspace-shell">
           <main className="workspace-main">
@@ -1308,7 +1357,13 @@ export const App = () => {
                   </header>
 
                   {activeTab && isTerminalTab(activeTab) ? (
-                    <TerminalView session={modex.activeTerminalSession} onSessionUpdate={modex.updateTerminalSession} />
+                    <TerminalView
+                      ref={terminalViewRef}
+                      modifierState={terminalModifierState}
+                      onModifierConsumed={() => setTerminalModifierState(DEFAULT_TERMINAL_MODIFIERS)}
+                      session={modex.activeTerminalSession}
+                      onSessionUpdate={modex.updateTerminalSession}
+                    />
                   ) : (
                     <ConversationView
                       activeSearchHitId={activeSearchHitId}
@@ -1401,7 +1456,27 @@ export const App = () => {
               slashCommands={slashCommandState?.suggestions ?? []}
             />
           ) : (
-            <TerminalFooter openTabCount={modex.openTabs.length} onOpenTabs={openTabs} statusLabel={terminalFooterLabel} />
+            <TerminalFooter
+              modifierState={terminalModifierState}
+              onFocusTerminal={() => terminalViewRef.current?.focus()}
+              onModifierToggle={(modifier) =>
+                setTerminalModifierState((current) => ({
+                  ...DEFAULT_TERMINAL_MODIFIERS,
+                  [modifier]: !current[modifier],
+                }))
+              }
+              onOpenTabs={openTabs}
+              onRunSearch={(query, direction) => terminalViewRef.current?.search(query, direction) ?? { activeIndex: 0, total: 0 }}
+              onSendShortcut={(key) => {
+                terminalViewRef.current?.sendInput(getTerminalShortcutSequence(key, terminalModifierState));
+                setTerminalModifierState(DEFAULT_TERMINAL_MODIFIERS);
+              }}
+              onToggleVoiceInput={toggleVoiceInput}
+              openTabCount={modex.openTabs.length}
+              recording={terminalRecording}
+              recordingStatus={terminalRecordingStatus}
+              session={modex.activeTerminalSession}
+            />
           )}
         </div>
 

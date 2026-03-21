@@ -20,7 +20,7 @@ type NavigatorWithWakeLock = Navigator & {
   };
 };
 
-export type TranscriptionTarget = 'draft' | 'search';
+export type TranscriptionTarget = 'draft' | 'search' | 'terminal';
 
 interface StartTranscriptionOptions {
   baseText: string;
