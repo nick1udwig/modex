@@ -12,4 +12,9 @@ test('terminal shell keeps a tight bottom inset', () => {
     styles,
     /\.terminal-canvas-shell\s*\{[\s\S]*?padding:\s*10px 10px calc\(4px \+ env\(safe-area-inset-bottom\)\);/,
   );
+
+  assert.match(
+    styles,
+    /\.terminal-canvas \.xterm\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;[\s\S]*?justify-content:\s*flex-end;/,
+  );
 });
