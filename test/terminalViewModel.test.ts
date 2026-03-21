@@ -4,13 +4,17 @@ import {
   DEFAULT_TERMINAL_FONT_SIZE,
   MAX_TERMINAL_FONT_SIZE,
   MIN_TERMINAL_FONT_SIZE,
+  TERMINAL_SOCKET_CONNECTING,
+  TERMINAL_SOCKET_OPEN,
   advanceTerminalTouchScroll,
   clampTerminalFontSize,
   isTerminalTapGesture,
   persistTerminalFontSize,
   readTerminalFontSize,
+  resolveTerminalAttachmentPresentation,
   resolveTerminalHelperTextAreaTop,
   resolveTerminalTouchScrollLines,
+  shouldReconnectTerminalAttach,
   stepTerminalFontSize,
 } from '../src/components/terminalViewModel.ts';
 
@@ -79,4 +83,69 @@ test('terminal touch scrolling converts pixel drag into buffered line scroll', (
     lineDelta: -2,
     scrollRemainder: -5,
   });
+});
+
+test('live terminals stay read-only and show loading until attach opens', () => {
+  assert.deepEqual(
+    resolveTerminalAttachmentPresentation({
+      attached: false,
+      liveSession: true,
+      sessionLabel: 'Live session',
+    }),
+    {
+      connectionLabel: 'Loading…',
+      cursorBlink: false,
+      disableStdin: true,
+      showLoading: true,
+    },
+  );
+
+  assert.deepEqual(
+    resolveTerminalAttachmentPresentation({
+      attached: true,
+      liveSession: true,
+      sessionLabel: 'Live session',
+    }),
+    {
+      connectionLabel: 'Live session',
+      cursorBlink: true,
+      disableStdin: false,
+      showLoading: false,
+    },
+  );
+});
+
+test('terminal attach reconnects only when visible and not already connected', () => {
+  assert.equal(
+    shouldReconnectTerminalAttach({
+      liveSession: true,
+      readyState: null,
+      visible: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldReconnectTerminalAttach({
+      liveSession: true,
+      readyState: TERMINAL_SOCKET_CONNECTING,
+      visible: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldReconnectTerminalAttach({
+      liveSession: true,
+      readyState: TERMINAL_SOCKET_OPEN,
+      visible: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldReconnectTerminalAttach({
+      liveSession: true,
+      readyState: null,
+      visible: false,
+    }),
+    false,
+  );
 });

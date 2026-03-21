@@ -14,10 +14,24 @@ interface StorageLike {
   setItem: (key: string, value: string) => void;
 }
 
+interface TerminalAttachmentPresentationInput {
+  attached: boolean;
+  liveSession: boolean;
+  sessionLabel: string;
+}
+
+interface TerminalReconnectInput {
+  liveSession: boolean;
+  readyState: number | null;
+  visible: boolean;
+}
+
 export const DEFAULT_TERMINAL_FONT_SIZE = 13;
 export const MAX_TERMINAL_FONT_SIZE = 18;
 export const MIN_TERMINAL_FONT_SIZE = 11;
 export const TERMINAL_FONT_SIZE_STORAGE_KEY = 'modex.terminal.fontSize';
+export const TERMINAL_SOCKET_CONNECTING = 0;
+export const TERMINAL_SOCKET_OPEN = 1;
 
 const TAP_DISTANCE_THRESHOLD = 10;
 
@@ -68,6 +82,20 @@ export const resolveTerminalTouchScrollLines = (scrollRemainder: number, scrollD
     scrollRemainder: totalDelta - lineDelta * safeRowHeight,
   };
 };
+
+export const resolveTerminalAttachmentPresentation = ({
+  attached,
+  liveSession,
+  sessionLabel,
+}: TerminalAttachmentPresentationInput) => ({
+  connectionLabel: liveSession ? (attached ? 'Live session' : 'Loading…') : sessionLabel,
+  cursorBlink: liveSession && attached,
+  disableStdin: !liveSession || !attached,
+  showLoading: liveSession && !attached,
+});
+
+export const shouldReconnectTerminalAttach = ({ liveSession, readyState, visible }: TerminalReconnectInput) =>
+  liveSession && visible && readyState !== TERMINAL_SOCKET_CONNECTING && readyState !== TERMINAL_SOCKET_OPEN;
 
 export const persistTerminalFontSize = (value: number, storage: StorageLike | null = browserStorage()) => {
   const nextValue = clampTerminalFontSize(value);

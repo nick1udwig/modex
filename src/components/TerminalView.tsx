@@ -10,7 +10,9 @@ import {
   advanceTerminalTouchScroll,
   isTerminalTapGesture,
   resolveTerminalHelperTextAreaTop,
+  resolveTerminalAttachmentPresentation,
   resolveTerminalTouchScrollLines,
+  shouldReconnectTerminalAttach,
 } from './terminalViewModel';
 
 interface TerminalViewProps {
@@ -162,7 +164,8 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const socketRef = useRef<WebSocket | null>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const resizeFrameRef = useRef<number | null>(null);
-    const [, setConnectionLabel] = useState<string | null>(null);
+    const [connectionLabel, setConnectionLabel] = useState<string | null>(null);
+    const [showLoading, setShowLoading] = useState(false);
 
     useEffect(() => {
       modifierStateRef.current = modifierState;
@@ -209,9 +212,15 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         return;
       }
 
-      terminalRef.current.options.disableStdin = !isTerminalSessionLive(session.status);
-      terminalRef.current.options.cursorBlink = isTerminalSessionLive(session.status);
-      setConnectionLabel((current) => (current === 'Connection error' ? current : terminalStatusLabel(session.status)));
+      const presentation = resolveTerminalAttachmentPresentation({
+        attached: socketRef.current?.readyState === WebSocket.OPEN,
+        liveSession: isTerminalSessionLive(session.status),
+        sessionLabel: terminalStatusLabel(session.status),
+      });
+      terminalRef.current.options.disableStdin = presentation.disableStdin;
+      terminalRef.current.options.cursorBlink = presentation.cursorBlink;
+      setConnectionLabel(presentation.connectionLabel);
+      setShowLoading(presentation.showLoading);
     }, [session?.idHash, session?.status]);
 
     useEffect(() => {
@@ -249,12 +258,25 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       fitAddon.fit();
       terminalRef.current = terminal;
 
-      setConnectionLabel(isTerminalSessionLive(session.status) ? 'Connecting…' : terminalStatusLabel(session.status));
-
       let connectTimeoutId: number | null = null;
+      let reconnectTimerId: number | null = null;
       let disposed = false;
       let socket: WebSocket | null = null;
-      let socketOpened = false;
+
+      const applyAttachmentPresentation = (attached: boolean, nextSession: TerminalSessionSummary = sessionRef.current ?? session) => {
+        const presentation = resolveTerminalAttachmentPresentation({
+          attached,
+          liveSession: isTerminalSessionLive(nextSession.status),
+          sessionLabel: terminalStatusLabel(nextSession.status),
+        });
+
+        terminal.options.disableStdin = presentation.disableStdin;
+        terminal.options.cursorBlink = presentation.cursorBlink;
+        setConnectionLabel(presentation.connectionLabel);
+        setShowLoading(presentation.showLoading);
+      };
+
+      applyAttachmentPresentation(false, session);
 
       const sendTerminalInput = (input: string) => {
         if (
@@ -303,6 +325,11 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       };
 
       const focusTerminal = () => {
+        if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+          setKeyboardEnabled(false);
+          return;
+        }
+
         setKeyboardEnabled(true);
         syncHelperTextareaPosition();
         terminal.focus();
@@ -435,34 +462,45 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           return;
         }
 
-        socket = new WebSocket(buildTerminalAttachUrl(session.idHash, terminal.rows, terminal.cols));
-        socket.binaryType = 'arraybuffer';
-        socketRef.current = socket;
+        const nextSession = sessionRef.current ?? session;
+        if (
+          !shouldReconnectTerminalAttach({
+            liveSession: isTerminalSessionLive(nextSession.status),
+            readyState: socketRef.current?.readyState ?? null,
+            visible: typeof document === 'undefined' ? true : document.visibilityState !== 'hidden',
+          })
+        ) {
+          return;
+        }
 
-        socket.addEventListener('open', () => {
-          if (disposed) {
-            socket?.close();
+        const nextSocket = new WebSocket(buildTerminalAttachUrl(session.idHash, terminal.rows, terminal.cols));
+        socket = nextSocket;
+        nextSocket.binaryType = 'arraybuffer';
+        socketRef.current = nextSocket;
+        applyAttachmentPresentation(false, nextSession);
+
+        nextSocket.addEventListener('open', () => {
+          if (disposed || socketRef.current !== nextSocket) {
+            nextSocket.close();
             return;
           }
 
-          socketOpened = true;
-          setConnectionLabel(isTerminalSessionLive(session.status) ? 'Live session' : terminalStatusLabel(session.status));
+          applyAttachmentPresentation(true, sessionRef.current ?? session);
           sendResize();
         });
 
-        socket.addEventListener('message', (event) => {
+        nextSocket.addEventListener('message', (event) => {
           if (typeof event.data === 'string') {
             try {
               const payload = JSON.parse(event.data) as TerminalEvent;
               if (payload.type === 'terminal.session' && payload.session) {
                 sessionRef.current = payload.session;
                 onSessionUpdateRef.current(payload.session);
-                setConnectionLabel(terminalStatusLabel(payload.session.status));
-                terminal.options.disableStdin = !isTerminalSessionLive(payload.session.status);
-                terminal.options.cursorBlink = isTerminalSessionLive(payload.session.status);
+                applyAttachmentPresentation(socketRef.current?.readyState === WebSocket.OPEN, payload.session);
               } else if (payload.type === 'terminal.error' && payload.message) {
                 terminal.writeln(`\r\n[modex] ${payload.message}`);
                 setConnectionLabel('Connection error');
+                setShowLoading(true);
               }
             } catch {
               // Ignore malformed control frames.
@@ -475,16 +513,43 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           });
         });
 
-        socket.addEventListener('close', () => {
-          setConnectionLabel(terminalStatusLabel(sessionRef.current?.status ?? session.status));
+        nextSocket.addEventListener('close', () => {
+          if (socketRef.current === nextSocket) {
+            socketRef.current = null;
+          }
+
+          applyAttachmentPresentation(false, sessionRef.current ?? session);
+          if (reconnectTimerId === null) {
+            reconnectTimerId = window.setTimeout(() => {
+              reconnectTimerId = null;
+              connectSocket();
+            }, 300);
+          }
         });
 
-        socket.addEventListener('error', () => {
-          setConnectionLabel('Connection error');
+        nextSocket.addEventListener('error', () => {
+          if (socketRef.current === nextSocket) {
+            applyAttachmentPresentation(false, sessionRef.current ?? session);
+          }
         });
       };
 
       connectTimeoutId = window.setTimeout(connectSocket, 0);
+
+      const triggerReconnect = () => {
+        if (reconnectTimerId !== null) {
+          window.clearTimeout(reconnectTimerId);
+          reconnectTimerId = null;
+        }
+
+        connectSocket();
+      };
+
+      const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+          triggerReconnect();
+        }
+      };
 
       const handlePointerDown = (event: PointerEvent) => {
         if (event.pointerType === 'mouse' && event.button !== 0) {
@@ -585,6 +650,10 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         setKeyboardEnabled(false);
       };
 
+      window.addEventListener('focus', triggerReconnect);
+      window.addEventListener('online', triggerReconnect);
+      window.addEventListener('pageshow', triggerReconnect);
+      document.addEventListener('visibilitychange', handleVisibilityChange);
       container.addEventListener('pointerdown', handlePointerDown);
       container.addEventListener('pointermove', handlePointerMove);
       container.addEventListener('pointerup', handlePointerUp);
@@ -598,6 +667,10 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         container.removeEventListener('pointerup', handlePointerUp);
         container.removeEventListener('pointercancel', clearPointerGesture);
         helperTextareaRef.current?.removeEventListener('blur', handleBlur);
+        window.removeEventListener('focus', triggerReconnect);
+        window.removeEventListener('online', triggerReconnect);
+        window.removeEventListener('pageshow', triggerReconnect);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
         resizeObserver.disconnect();
         removeInputListener.dispose();
         if (resizeFrameRef.current !== null) {
@@ -608,7 +681,11 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           window.clearTimeout(connectTimeoutId);
           connectTimeoutId = null;
         }
-        if (socketOpened && socket) {
+        if (reconnectTimerId !== null) {
+          window.clearTimeout(reconnectTimerId);
+          reconnectTimerId = null;
+        }
+        if (socket && socket.readyState < WebSocket.CLOSING) {
           socket.close();
         }
         if (socketRef.current === socket) {
@@ -638,6 +715,11 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       <section className="terminal-screen" aria-label="Terminal session">
         <div className="terminal-canvas-shell">
           <div ref={containerRef} className="terminal-canvas" />
+          {showLoading ? (
+            <div className="terminal-loading" role="status" aria-live="polite">
+              <span className="terminal-loading__label">{connectionLabel ?? 'Loading…'}</span>
+            </div>
+          ) : null}
         </div>
       </section>
     );
