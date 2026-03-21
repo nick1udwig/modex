@@ -16,11 +16,12 @@ interface SelectedDirectoriesCardProps {
   browseButtonLabel: string;
   emptyLabel: string;
   helperText: string;
-  onMovePathToFront: (path: string) => void;
+  onMovePathToFront?: (path: string) => void;
   onOpenBrowse: () => void;
   onRemovePath?: (path: string) => void;
   pathLabel: (index: number) => string;
   paths: string[];
+  selectionMode?: 'multiple' | 'single';
   title: string;
 }
 
@@ -33,12 +34,13 @@ export const SelectedDirectoriesCard = ({
   onRemovePath,
   pathLabel,
   paths,
+  selectionMode = 'multiple',
   title,
 }: SelectedDirectoriesCardProps) => (
   <div className="settings-sheet__paths-card">
     <div className="settings-sheet__paths-header">
       <span className="settings-sheet__paths-section-title">{title}</span>
-      <span className="settings-sheet__count-pill">{paths.length} selected</span>
+      {selectionMode === 'multiple' ? <span className="settings-sheet__count-pill">{paths.length} selected</span> : null}
     </div>
 
     <div className="settings-sheet__paths-helper">{helperText}</div>
@@ -49,15 +51,27 @@ export const SelectedDirectoriesCard = ({
 
         {paths.map((path, index) => (
           <div key={path} className="settings-sheet__path-row">
-            <button className="settings-sheet__path-card" type="button" onClick={() => onMovePathToFront(path)}>
-              <span className="settings-sheet__path-icon">
-                <Icon name={index === 0 ? 'folder-open' : 'folder'} size={16} />
-              </span>
-              <span className="settings-sheet__path-copy">
-                <span className="settings-sheet__path-label">{pathLabel(index)}</span>
-                <span className="settings-sheet__path-value">{path}</span>
-              </span>
-            </button>
+            {onMovePathToFront ? (
+              <button className="settings-sheet__path-card" type="button" onClick={() => onMovePathToFront(path)}>
+                <span className="settings-sheet__path-icon">
+                  <Icon name={index === 0 ? 'folder-open' : 'folder'} size={16} />
+                </span>
+                <span className="settings-sheet__path-copy">
+                  <span className="settings-sheet__path-label">{pathLabel(index)}</span>
+                  <span className="settings-sheet__path-value">{path}</span>
+                </span>
+              </button>
+            ) : (
+              <div className="settings-sheet__path-card settings-sheet__path-card--static">
+                <span className="settings-sheet__path-icon">
+                  <Icon name={index === 0 ? 'folder-open' : 'folder'} size={16} />
+                </span>
+                <span className="settings-sheet__path-copy">
+                  <span className="settings-sheet__path-label">{pathLabel(index)}</span>
+                  <span className="settings-sheet__path-value">{path}</span>
+                </span>
+              </div>
+            )}
 
             {onRemovePath ? (
               <button className="settings-sheet__path-remove" type="button" onClick={() => onRemovePath(path)} aria-label={`Remove ${path}`}>

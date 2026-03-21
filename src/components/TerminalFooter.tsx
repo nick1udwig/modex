@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FooterNavBar } from './FooterNavBar';
 import { Icon } from './Icon';
 import {
@@ -50,6 +50,7 @@ export const TerminalFooter = ({
   const [searchActive, setSearchActive] = useState(false);
   const [searchHitLabel, setSearchHitLabel] = useState('0/0');
   const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const voiceProcessing = recordingStatus === 'processing';
   const recordingLabel = recordingStatus === 'connecting' ? 'Starting voice' : voiceProcessing ? 'Finishing voice' : 'Transcribing';
 
@@ -63,6 +64,26 @@ export const TerminalFooter = ({
   const syncSearch = (query: string, direction: 'current' | 'next' | 'previous' = 'current') => {
     const nextState = onRunSearch(query, direction);
     setSearchHitLabel(formatSearchHitLabel(nextState));
+  };
+
+  const focusSearchInput = () => {
+    const input = searchInputRef.current;
+    if (!input) {
+      return;
+    }
+
+    input.focus({ preventScroll: true });
+    const selectionPoint = input.value.length;
+    input.setSelectionRange(selectionPoint, selectionPoint);
+  };
+
+  const handleSearchInputPress = (input: HTMLInputElement, event: { preventDefault: () => void }) => {
+    if (document.activeElement === input) {
+      return;
+    }
+
+    event.preventDefault();
+    focusSearchInput();
   };
 
   return (
@@ -85,11 +106,19 @@ export const TerminalFooter = ({
 
           <div className="composer-input terminal-footer__search-input-shell">
             <input
+              ref={searchInputRef}
               className="terminal-footer__search-input"
               type="text"
               value={searchQuery}
               placeholder="Search terminal"
               aria-label="Search terminal"
+              onFocus={() => {
+                window.requestAnimationFrame(() => {
+                  document.scrollingElement?.scrollTo({ top: 0 });
+                });
+              }}
+              onMouseDown={(event) => handleSearchInputPress(event.currentTarget, event)}
+              onTouchStart={(event) => handleSearchInputPress(event.currentTarget, event)}
               onChange={(event) => {
                 const nextQuery = event.target.value;
                 setSearchQuery(nextQuery);

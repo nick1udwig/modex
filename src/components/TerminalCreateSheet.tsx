@@ -39,7 +39,7 @@ export const TerminalCreateSheet = ({
     const seed = seedBrowseState([], recentRoots);
     return createBrowseState(seed.anchorPath, seed.selectedPath);
   });
-  const [roots, setRoots] = useState<string[]>(() => (recentRoots[0] ? [recentRoots[0]] : []));
+  const [workingDirectory, setWorkingDirectory] = useState<string | null>(() => recentRoots[0] ?? null);
   const [view, setView] = useState<'browse' | 'form'>('form');
   const requestSequenceRef = useRef(0);
   const wasOpenRef = useRef(false);
@@ -48,7 +48,7 @@ export const TerminalCreateSheet = ({
     if (open && !wasOpenRef.current) {
       const seed = seedBrowseState([], recentRoots);
       setBrowse(createBrowseState(seed.anchorPath, seed.selectedPath));
-      setRoots(seed.selectedPath ? [seed.selectedPath] : []);
+      setWorkingDirectory(seed.selectedPath || null);
       setView('form');
     }
 
@@ -115,7 +115,7 @@ export const TerminalCreateSheet = ({
     }
   };
 
-  const selectedRoots = roots;
+  const selectedRoots = workingDirectory ? [workingDirectory] : [];
   const seed = useMemo(() => seedBrowseState(selectedRoots, recentRoots), [recentRoots, selectedRoots]);
   const activeBrowseRoot = useMemo(
     () => browse.roots.find((root) => browse.anchorPath.startsWith(root.path)) ?? browse.roots[0] ?? null,
@@ -154,7 +154,7 @@ export const TerminalCreateSheet = ({
       return;
     }
 
-    setRoots((current) => addSelectedDirectory(current, browsePreviewPath, 'single'));
+    setWorkingDirectory(addSelectedDirectory(selectedRoots, browsePreviewPath, 'single')[0] ?? null);
     setView('form');
   };
 
@@ -218,11 +218,11 @@ export const TerminalCreateSheet = ({
               browseButtonLabel="Browse remote machine directories"
               emptyLabel="No working directory selected yet."
               helperText="This path is on the remote machine running tmuy, not on this mobile device."
-              onMovePathToFront={(path) => setRoots((current) => moveSelectedDirectoryToFront(current, path))}
               onOpenBrowse={openBrowsePane}
-              onRemovePath={(path) => setRoots((current) => removeSelectedDirectory(current, path))}
-              pathLabel={() => 'working directory'}
+              onRemovePath={(path) => setWorkingDirectory(removeSelectedDirectory(selectedRoots, path)[0] ?? null)}
+              pathLabel={() => 'selected working directory'}
               paths={selectedRoots}
+              selectionMode="single"
               title="Remote working directory"
             />
           </div>
@@ -234,8 +234,8 @@ export const TerminalCreateSheet = ({
             <button
               className="settings-sheet__button settings-sheet__button--primary"
               type="button"
-              disabled={selectedRoots.length === 0}
-              onClick={() => onSubmit(selectedRoots[0] ?? '')}
+              disabled={!workingDirectory}
+              onClick={() => onSubmit(workingDirectory ?? '')}
             >
               Open terminal
             </button>

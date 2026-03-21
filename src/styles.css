@@ -1990,6 +1990,9 @@ textarea:disabled {
   border: 1px solid var(--border);
   background: #1e1e1e;
   color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .settings-sheet__sandbox-card {
@@ -2182,6 +2185,10 @@ textarea:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.settings-sheet__path-card--static {
+  cursor: default;
 }
 
 .settings-sheet__path-icon {
@@ -2547,17 +2554,24 @@ textarea:focus-visible {
   flex-direction: column;
 }
 
-.terminal-canvas {
+.terminal-canvas-shell {
   flex: 1;
   min-height: 0;
-  padding: 10px;
+  display: flex;
+  padding: 10px 10px calc(14px + env(safe-area-inset-bottom));
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 20px 20px 0 0;
   background:
     radial-gradient(circle at top, rgba(114, 255, 183, 0.08), transparent 48%),
     linear-gradient(180deg, rgba(12, 24, 19, 0.98), rgba(8, 13, 11, 1));
   overflow: hidden;
-  touch-action: pan-y pinch-zoom;
+  overscroll-behavior: contain;
+  touch-action: none;
+}
+
+.terminal-canvas {
+  flex: 1;
+  min-height: 0;
 }
 
 .terminal-canvas .xterm {

@@ -1,3 +1,4 @@
+import { Icon } from './Icon';
 import { SlidingBottomSheet } from './SlidingBottomSheet';
 
 interface NewTabSheetProps {
@@ -18,9 +19,15 @@ export const NewTabSheet = ({
   return (
     <SlidingBottomSheet ariaLabel="Create a new tab" open={open} onClose={onClose} panelClassName="picker-sheet">
       <>
-        <div className="picker-sheet__header">
-          <p className="picker-sheet__eyebrow">New tab</p>
-          <h2 className="picker-sheet__title">Choose what this tab should host.</h2>
+        <div className="settings-sheet__header">
+          <div className="settings-sheet__header-copy">
+            <p className="picker-sheet__eyebrow">New tab</p>
+            <h2 className="picker-sheet__title">Choose what this tab should host.</h2>
+          </div>
+
+          <button className="settings-sheet__close" type="button" onClick={onClose} aria-label="Close new tab sheet">
+            <Icon name="x" size={16} />
+          </button>
         </div>
 
         <div className="picker-sheet__actions">

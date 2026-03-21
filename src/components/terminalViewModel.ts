@@ -3,6 +3,12 @@ interface Point {
   y: number;
 }
 
+interface TerminalTouchScrollState {
+  lastY: number;
+  scrolling: boolean;
+  startY: number;
+}
+
 interface StorageLike {
   getItem: (key: string) => string | null;
   setItem: (key: string, value: string) => void;
@@ -40,6 +46,29 @@ export const clampTerminalFontSize = (value: number) => {
 export const isTerminalTapGesture = (start: Point, end: Point, threshold = TAP_DISTANCE_THRESHOLD) =>
   Math.hypot(end.x - start.x, end.y - start.y) <= threshold;
 
+export const advanceTerminalTouchScroll = (state: TerminalTouchScrollState, nextY: number, threshold = TAP_DISTANCE_THRESHOLD) => {
+  const scrolling = state.scrolling || Math.abs(nextY - state.startY) > threshold;
+  return {
+    nextState: {
+      lastY: nextY,
+      scrolling,
+      startY: state.startY,
+    } satisfies TerminalTouchScrollState,
+    scrollDelta: scrolling ? state.lastY - nextY : 0,
+  };
+};
+
+export const resolveTerminalTouchScrollLines = (scrollRemainder: number, scrollDelta: number, rowHeight: number) => {
+  const safeRowHeight = Math.max(1, rowHeight);
+  const totalDelta = scrollRemainder + scrollDelta;
+  const lineDelta = totalDelta > 0 ? Math.floor(totalDelta / safeRowHeight) : Math.ceil(totalDelta / safeRowHeight);
+
+  return {
+    lineDelta,
+    scrollRemainder: totalDelta - lineDelta * safeRowHeight,
+  };
+};
+
 export const persistTerminalFontSize = (value: number, storage: StorageLike | null = browserStorage()) => {
   const nextValue = clampTerminalFontSize(value);
   storage?.setItem(TERMINAL_FONT_SIZE_STORAGE_KEY, `${nextValue}`);
@@ -59,5 +88,8 @@ export const readTerminalFontSize = (storage: StorageLike | null = browserStorag
 
   return clampTerminalFontSize(parsedValue);
 };
+
+export const resolveTerminalHelperTextAreaTop = (viewportHeight: number, offsetTop = 0, bottomInset = 18) =>
+  Math.max(0, Math.round(offsetTop + viewportHeight - bottomInset));
 
 export const stepTerminalFontSize = (current: number, direction: -1 | 1) => clampTerminalFontSize(current + direction);

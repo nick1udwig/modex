@@ -6,7 +6,12 @@ import { isTerminalSessionLive, terminalStatusLabel } from '../app/tabs';
 import type { TerminalSessionSummary } from '../app/types';
 import { buildTerminalAttachUrl } from '../services/sidecarTerminalClient';
 import { getTerminalShortcutSequence, getTerminalTextSequence, type TerminalModifierState } from './terminalInputModel';
-import { isTerminalTapGesture } from './terminalViewModel';
+import {
+  advanceTerminalTouchScroll,
+  isTerminalTapGesture,
+  resolveTerminalHelperTextAreaTop,
+  resolveTerminalTouchScrollLines,
+} from './terminalViewModel';
 
 interface TerminalViewProps {
   fontSize: number;
@@ -41,8 +46,12 @@ interface TerminalSearchStore {
 
 interface PointerGesture {
   pointerId: number;
-  x: number;
-  y: number;
+  pointerType: string;
+  scrollRemainder: number;
+  scrolling: boolean;
+  startX: number;
+  startY: number;
+  lastY: number;
 }
 
 export interface TerminalViewHandle {
@@ -272,12 +281,36 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         textarea.inputMode = enabled ? 'text' : 'none';
       };
 
+      const syncHelperTextareaPosition = () => {
+        const textarea = helperTextareaRef.current;
+        if (!textarea) {
+          return;
+        }
+
+        const visualViewport = window.visualViewport;
+        const top = resolveTerminalHelperTextAreaTop(
+          visualViewport?.height ?? window.innerHeight,
+          visualViewport?.offsetTop ?? 0,
+        );
+
+        textarea.style.position = 'fixed';
+        textarea.style.top = `${top}px`;
+        textarea.style.left = '12px';
+        textarea.style.width = '1px';
+        textarea.style.height = '1px';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+      };
+
       const focusTerminal = () => {
         setKeyboardEnabled(true);
+        syncHelperTextareaPosition();
         terminal.focus();
+        helperTextareaRef.current?.focus({ preventScroll: true });
       };
 
       focusTerminalRef.current = focusTerminal;
+      syncHelperTextareaPosition();
       setKeyboardEnabled(false);
 
       const sendResize = () => {
@@ -348,6 +381,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         resizeFrameRef.current = window.requestAnimationFrame(() => {
           resizeFrameRef.current = null;
           fitAddon.fit();
+          syncHelperTextareaPosition();
           sendResize();
         });
       };
@@ -458,27 +492,84 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         }
 
         setKeyboardEnabled(false);
+        if (!container.hasPointerCapture(event.pointerId)) {
+          container.setPointerCapture(event.pointerId);
+        }
         pointerGestureRef.current = {
+          lastY: event.clientY,
           pointerId: event.pointerId,
-          x: event.clientX,
-          y: event.clientY,
+          pointerType: event.pointerType,
+          scrollRemainder: 0,
+          scrolling: false,
+          startX: event.clientX,
+          startY: event.clientY,
         };
+      };
+
+      const handlePointerMove = (event: PointerEvent) => {
+        const gesture = pointerGestureRef.current;
+        if (!gesture || gesture.pointerId !== event.pointerId || gesture.pointerType === 'mouse') {
+          return;
+        }
+
+        const { nextState, scrollDelta } = advanceTerminalTouchScroll(
+          {
+            lastY: gesture.lastY,
+            scrolling: gesture.scrolling,
+            startY: gesture.startY,
+          },
+          event.clientY,
+        );
+
+        const nextGesture = {
+          ...gesture,
+          lastY: nextState.lastY,
+          scrolling: nextState.scrolling,
+        };
+        pointerGestureRef.current = nextGesture;
+
+        if (!nextState.scrolling) {
+          return;
+        }
+
+        event.preventDefault();
+        helperTextareaRef.current?.blur();
+        const terminal = terminalRef.current;
+        if (!terminal) {
+          return;
+        }
+
+        const helperHeight = helperTextareaRef.current?.getBoundingClientRect().height ?? 0;
+        const rowHeight = Math.max(helperHeight, Number(terminal.options.fontSize ?? fontSize) * 1.25, 12);
+        const { lineDelta, scrollRemainder } = resolveTerminalTouchScrollLines(nextGesture.scrollRemainder, scrollDelta, rowHeight);
+
+        pointerGestureRef.current = {
+          ...nextGesture,
+          scrollRemainder,
+        };
+
+        if (lineDelta !== 0) {
+          terminal.scrollLines(lineDelta);
+        }
       };
 
       const handlePointerUp = (event: PointerEvent) => {
         const gesture = pointerGestureRef.current;
         pointerGestureRef.current = null;
+        if (container.hasPointerCapture(event.pointerId)) {
+          container.releasePointerCapture(event.pointerId);
+        }
 
         if (!gesture || gesture.pointerId !== event.pointerId) {
           return;
         }
 
-        if (
-          isTerminalTapGesture(
-            { x: gesture.x, y: gesture.y },
-            { x: event.clientX, y: event.clientY },
-          )
-        ) {
+        if (gesture.scrolling) {
+          helperTextareaRef.current?.blur();
+          return;
+        }
+
+        if (isTerminalTapGesture({ x: gesture.startX, y: gesture.startY }, { x: event.clientX, y: event.clientY })) {
           focusTerminal();
           return;
         }
@@ -495,6 +586,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       };
 
       container.addEventListener('pointerdown', handlePointerDown);
+      container.addEventListener('pointermove', handlePointerMove);
       container.addEventListener('pointerup', handlePointerUp);
       container.addEventListener('pointercancel', clearPointerGesture);
       helperTextareaRef.current?.addEventListener('blur', handleBlur);
@@ -502,6 +594,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       return () => {
         disposed = true;
         container.removeEventListener('pointerdown', handlePointerDown);
+        container.removeEventListener('pointermove', handlePointerMove);
         container.removeEventListener('pointerup', handlePointerUp);
         container.removeEventListener('pointercancel', clearPointerGesture);
         helperTextareaRef.current?.removeEventListener('blur', handleBlur);
@@ -543,7 +636,9 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
     return (
       <section className="terminal-screen" aria-label="Terminal session">
-        <div ref={containerRef} className="terminal-canvas" />
+        <div className="terminal-canvas-shell">
+          <div ref={containerRef} className="terminal-canvas" />
+        </div>
       </section>
     );
   },
