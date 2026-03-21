@@ -6,8 +6,10 @@ import { isTerminalSessionLive, terminalStatusLabel } from '../app/tabs';
 import type { TerminalSessionSummary } from '../app/types';
 import { buildTerminalAttachUrl } from '../services/sidecarTerminalClient';
 import { getTerminalShortcutSequence, getTerminalTextSequence, type TerminalModifierState } from './terminalInputModel';
+import { isTerminalTapGesture } from './terminalViewModel';
 
 interface TerminalViewProps {
+  fontSize: number;
   modifierState: TerminalModifierState;
   onModifierConsumed: () => void;
   onSessionUpdate: (session: TerminalSessionSummary) => void;
@@ -35,6 +37,12 @@ interface TerminalSearchStore {
   index: number;
   matches: TerminalSearchMatch[];
   query: string;
+}
+
+interface PointerGesture {
+  pointerId: number;
+  x: number;
+  y: number;
 }
 
 export interface TerminalViewHandle {
@@ -126,12 +134,16 @@ const applySearchMatch = (terminal: Terminal, match: TerminalSearchMatch | null)
 };
 
 export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
-  ({ modifierState, onModifierConsumed, onSessionUpdate, session }, ref) => {
+  ({ fontSize, modifierState, onModifierConsumed, onSessionUpdate, session }, ref) => {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
+    const focusTerminalRef = useRef<() => void>(() => undefined);
+    const helperTextareaRef = useRef<HTMLTextAreaElement | null>(null);
     const modifierStateRef = useRef(modifierState);
     const onModifierConsumedRef = useRef(onModifierConsumed);
     const onSessionUpdateRef = useRef(onSessionUpdate);
+    const pointerGestureRef = useRef<PointerGesture | null>(null);
+    const scheduleResizeRef = useRef<() => void>(() => undefined);
     const searchRef = useRef<(query: string, direction?: 'current' | 'next' | 'previous') => TerminalSearchState>(
       () => EMPTY_SEARCH_STATE,
     );
@@ -141,11 +153,21 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const socketRef = useRef<WebSocket | null>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const resizeFrameRef = useRef<number | null>(null);
-    const [connectionLabel, setConnectionLabel] = useState<string | null>(null);
+    const [, setConnectionLabel] = useState<string | null>(null);
 
     useEffect(() => {
       modifierStateRef.current = modifierState;
     }, [modifierState]);
+
+    useEffect(() => {
+      const terminal = terminalRef.current;
+      if (!terminal) {
+        return;
+      }
+
+      terminal.options.fontSize = fontSize;
+      scheduleResizeRef.current();
+    }, [fontSize]);
 
     useEffect(() => {
       onModifierConsumedRef.current = onModifierConsumed;
@@ -163,13 +185,11 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       ref,
       () => ({
         clearSearch: () => searchRef.current(''),
-        focus: () => {
-          terminalRef.current?.focus();
-        },
+        focus: () => focusTerminalRef.current(),
         search: (query, direction = 'current') => searchRef.current(query, direction),
         sendInput: (input) => {
           sendInputRef.current(input);
-          terminalRef.current?.focus();
+          focusTerminalRef.current();
         },
       }),
       [],
@@ -205,7 +225,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         cursorStyle: 'bar',
         disableStdin: !isTerminalSessionLive(session.status),
         fontFamily: '"IBM Plex Mono", "Fira Code", monospace',
-        fontSize: 14,
+        fontSize,
         letterSpacing: 0.2,
         lineHeight: 1.25,
         scrollback: 5_000,
@@ -215,8 +235,9 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       fitAddonRef.current = fitAddon;
       terminal.loadAddon(fitAddon);
       terminal.open(container);
+      const helperTextarea = container.querySelector('.xterm-helper-textarea');
+      helperTextareaRef.current = helperTextarea instanceof HTMLTextAreaElement ? helperTextarea : null;
       fitAddon.fit();
-      terminal.focus();
       terminalRef.current = terminal;
 
       setConnectionLabel(isTerminalSessionLive(session.status) ? 'Connecting…' : terminalStatusLabel(session.status));
@@ -240,6 +261,24 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       };
 
       sendInputRef.current = sendTerminalInput;
+
+      const setKeyboardEnabled = (enabled: boolean) => {
+        const textarea = helperTextareaRef.current;
+        if (!textarea) {
+          return;
+        }
+
+        textarea.readOnly = !enabled;
+        textarea.inputMode = enabled ? 'text' : 'none';
+      };
+
+      const focusTerminal = () => {
+        setKeyboardEnabled(true);
+        terminal.focus();
+      };
+
+      focusTerminalRef.current = focusTerminal;
+      setKeyboardEnabled(false);
 
       const sendResize = () => {
         if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
@@ -312,6 +351,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           sendResize();
         });
       };
+      scheduleResizeRef.current = scheduleResize;
 
       const resizeObserver = new ResizeObserver(() => {
         scheduleResize();
@@ -344,7 +384,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         event.preventDefault();
         sendTerminalInput(sequence);
         onModifierConsumedRef.current();
-        terminal.focus();
+        focusTerminal();
         return false;
       });
 
@@ -412,14 +452,59 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
       connectTimeoutId = window.setTimeout(connectSocket, 0);
 
-      const handlePointerDown = () => {
-        terminal.focus();
+      const handlePointerDown = (event: PointerEvent) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) {
+          return;
+        }
+
+        setKeyboardEnabled(false);
+        pointerGestureRef.current = {
+          pointerId: event.pointerId,
+          x: event.clientX,
+          y: event.clientY,
+        };
       };
+
+      const handlePointerUp = (event: PointerEvent) => {
+        const gesture = pointerGestureRef.current;
+        pointerGestureRef.current = null;
+
+        if (!gesture || gesture.pointerId !== event.pointerId) {
+          return;
+        }
+
+        if (
+          isTerminalTapGesture(
+            { x: gesture.x, y: gesture.y },
+            { x: event.clientX, y: event.clientY },
+          )
+        ) {
+          focusTerminal();
+          return;
+        }
+
+        helperTextareaRef.current?.blur();
+      };
+
+      const clearPointerGesture = () => {
+        pointerGestureRef.current = null;
+      };
+
+      const handleBlur = () => {
+        setKeyboardEnabled(false);
+      };
+
       container.addEventListener('pointerdown', handlePointerDown);
+      container.addEventListener('pointerup', handlePointerUp);
+      container.addEventListener('pointercancel', clearPointerGesture);
+      helperTextareaRef.current?.addEventListener('blur', handleBlur);
 
       return () => {
         disposed = true;
         container.removeEventListener('pointerdown', handlePointerDown);
+        container.removeEventListener('pointerup', handlePointerUp);
+        container.removeEventListener('pointercancel', clearPointerGesture);
+        helperTextareaRef.current?.removeEventListener('blur', handleBlur);
         resizeObserver.disconnect();
         removeInputListener.dispose();
         if (resizeFrameRef.current !== null) {
@@ -438,6 +523,9 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         }
         searchRef.current = () => EMPTY_SEARCH_STATE;
         searchStoreRef.current = EMPTY_SEARCH_STORE;
+        focusTerminalRef.current = () => undefined;
+        helperTextareaRef.current = null;
+        scheduleResizeRef.current = () => undefined;
         sendInputRef.current = () => undefined;
         terminal.dispose();
         if (fitAddonRef.current === fitAddon) {
@@ -455,15 +543,6 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
     return (
       <section className="terminal-screen" aria-label="Terminal session">
-        <div className="terminal-meta">
-          <div>
-            <p className="terminal-meta__title">{session.currentName}</p>
-            <p className="terminal-meta__subtitle">{session.cwd || session.startedName}</p>
-          </div>
-          <span className={`terminal-meta__status terminal-meta__status--${session.status}`}>
-            {connectionLabel ?? terminalStatusLabel(session.status)}
-          </span>
-        </div>
         <div ref={containerRef} className="terminal-canvas" />
       </section>
     );

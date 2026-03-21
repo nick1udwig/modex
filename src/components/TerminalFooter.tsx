@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import type { TerminalSessionSummary } from '../app/types';
 import { FooterNavBar } from './FooterNavBar';
 import { Icon } from './Icon';
 import {
@@ -7,6 +6,7 @@ import {
   type TerminalModifierState,
   type TerminalShortcutKey,
 } from './terminalInputModel';
+import { MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE } from './terminalViewModel';
 
 interface TerminalSearchState {
   activeIndex: number;
@@ -14,6 +14,8 @@ interface TerminalSearchState {
 }
 
 interface TerminalFooterProps {
+  fontSize: number;
+  onAdjustFontSize: (direction: -1 | 1) => void;
   onFocusTerminal: () => void;
   modifierState: TerminalModifierState;
   onModifierToggle: (modifier: 'alt' | 'ctrl') => void;
@@ -24,12 +26,14 @@ interface TerminalFooterProps {
   openTabCount: number;
   recording: boolean;
   recordingStatus?: 'connecting' | 'processing' | 'recording' | null;
-  session: TerminalSessionSummary | null;
+  sessionId: string | null;
 }
 
 const formatSearchHitLabel = ({ activeIndex, total }: TerminalSearchState) => `${total === 0 ? 0 : activeIndex}/${total}`;
 
 export const TerminalFooter = ({
+  fontSize,
+  onAdjustFontSize,
   onFocusTerminal,
   modifierState,
   onModifierToggle,
@@ -40,7 +44,7 @@ export const TerminalFooter = ({
   openTabCount,
   recording,
   recordingStatus = null,
-  session,
+  sessionId,
 }: TerminalFooterProps) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchActive, setSearchActive] = useState(false);
@@ -54,7 +58,7 @@ export const TerminalFooter = ({
     setSearchActive(false);
     setSearchHitLabel('0/0');
     setSearchQuery('');
-  }, [session?.idHash]);
+  }, [sessionId]);
 
   const syncSearch = (query: string, direction: 'current' | 'next' | 'previous' = 'current') => {
     const nextState = onRunSearch(query, direction);
@@ -81,7 +85,6 @@ export const TerminalFooter = ({
 
           <div className="composer-input terminal-footer__search-input-shell">
             <input
-              autoFocus
               className="terminal-footer__search-input"
               type="text"
               value={searchQuery}
@@ -181,10 +184,30 @@ export const TerminalFooter = ({
 
                 {menuOpen ? (
                   <div className="footer-menu__panel terminal-footer__menu">
-                    <div className="footer-menu__label">Terminal</div>
-                    <div className="terminal-footer__menu-title">{session?.currentName ?? 'tmuy session'}</div>
-                    <div className="terminal-footer__menu-copy">{session?.cwd || session?.startedName || 'No working directory'}</div>
-                    <div className="terminal-footer__menu-copy">Detach key {session?.detachKey ?? 'n/a'}</div>
+                    <div className="footer-menu__label">Text size</div>
+                    <div className="footer-menu__toggle terminal-footer__font-controls">
+                      <button
+                        className="footer-menu__toggle-button"
+                        type="button"
+                        onClick={() => onAdjustFontSize(-1)}
+                        aria-label="Smaller terminal text"
+                        disabled={fontSize <= MIN_TERMINAL_FONT_SIZE}
+                      >
+                        A-
+                      </button>
+                      <div className="footer-menu__toggle-button footer-menu__toggle-button--active terminal-footer__font-value">
+                        {fontSize}px
+                      </div>
+                      <button
+                        className="footer-menu__toggle-button"
+                        type="button"
+                        onClick={() => onAdjustFontSize(1)}
+                        aria-label="Larger terminal text"
+                        disabled={fontSize >= MAX_TERMINAL_FONT_SIZE}
+                      >
+                        A+
+                      </button>
+                    </div>
                   </div>
                 ) : null}
               </div>

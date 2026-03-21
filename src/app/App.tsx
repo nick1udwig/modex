@@ -19,6 +19,7 @@ import { TerminalSessionPickerSheet } from '../components/TerminalSessionPickerS
 import { TerminalView, type TerminalViewHandle } from '../components/TerminalView';
 import { TabsBar } from '../components/TabsBar';
 import { getTerminalShortcutSequence, type TerminalModifierState } from '../components/terminalInputModel';
+import { persistTerminalFontSize, readTerminalFontSize, stepTerminalFontSize } from '../components/terminalViewModel';
 import { createAppServerClient } from '../services/appServerClient';
 import { createSidecarFilesystemClient } from '../services/sidecarClient';
 import { createSidecarTerminalClient } from '../services/sidecarTerminalClient';
@@ -196,6 +197,7 @@ export const App = () => {
   const [newTabSheetOpen, setNewTabSheetOpen] = useState(false);
   const [settingsSheet, setSettingsSheet] = useState<SettingsSheetState>(CLOSED_SETTINGS_SHEET);
   const [terminalCreateSheetOpen, setTerminalCreateSheetOpen] = useState(false);
+  const [terminalFontSize, setTerminalFontSize] = useState(() => readTerminalFontSize());
   const [terminalModifierState, setTerminalModifierState] = useState<TerminalModifierState>(DEFAULT_TERMINAL_MODIFIERS);
   const [terminalSessionPickerOpen, setTerminalSessionPickerOpen] = useState(false);
   const [viewportSize, setViewportSize] = useState(() => readViewportSize());
@@ -331,6 +333,9 @@ export const App = () => {
 
   useEffect(() => () => filesystemClient.close(), [filesystemClient]);
   useEffect(() => () => terminalClient.close(), [terminalClient]);
+  useEffect(() => {
+    persistTerminalFontSize(terminalFontSize);
+  }, [terminalFontSize]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -1359,6 +1364,7 @@ export const App = () => {
                   {activeTab && isTerminalTab(activeTab) ? (
                     <TerminalView
                       ref={terminalViewRef}
+                      fontSize={terminalFontSize}
                       modifierState={terminalModifierState}
                       onModifierConsumed={() => setTerminalModifierState(DEFAULT_TERMINAL_MODIFIERS)}
                       session={modex.activeTerminalSession}
@@ -1457,7 +1463,9 @@ export const App = () => {
             />
           ) : (
             <TerminalFooter
+              fontSize={terminalFontSize}
               modifierState={terminalModifierState}
+              onAdjustFontSize={(direction) => setTerminalFontSize((current) => stepTerminalFontSize(current, direction))}
               onFocusTerminal={() => terminalViewRef.current?.focus()}
               onModifierToggle={(modifier) =>
                 setTerminalModifierState((current) => ({
@@ -1471,11 +1479,11 @@ export const App = () => {
                 terminalViewRef.current?.sendInput(getTerminalShortcutSequence(key, terminalModifierState));
                 setTerminalModifierState(DEFAULT_TERMINAL_MODIFIERS);
               }}
+              sessionId={modex.activeTerminalSession?.idHash ?? null}
               onToggleVoiceInput={toggleVoiceInput}
               openTabCount={modex.openTabs.length}
               recording={terminalRecording}
               recordingStatus={terminalRecordingStatus}
-              session={modex.activeTerminalSession}
             />
           )}
         </div>
