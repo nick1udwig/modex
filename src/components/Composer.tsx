@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SlashCommandSuggestion } from '../app/slashCommands';
 import type { AccessMode, ApprovalDecision, InteractionRequest, PendingAttachment } from '../app/types';
+import { resolveComposerFooterLayout } from './composerFooterModel';
+import { FooterNavBar } from './FooterNavBar';
 import { Icon } from './Icon';
 import { InteractionPrompt } from './InteractionPrompt';
 
@@ -95,6 +97,7 @@ export const Composer = ({
   const showSend = !showStop && !searchActive && (hasDraft || attachments.length > 0) && !recording;
   const recordingLabel = recordingStatus === 'connecting' ? 'Starting voice' : voiceProcessing ? 'Finishing voice' : 'Transcribing';
   const showChatControls = mode === 'chat';
+  const footerLayout = resolveComposerFooterLayout({ mode, searchActive });
 
   useEffect(() => {
     if (!inputRef.current) {
@@ -322,113 +325,113 @@ export const Composer = ({
         />
       ) : null}
 
-      <div className={`footer-nav ${searchActive ? 'footer-nav--search' : ''}`}>
-        {searchActive ? (
-          <>
+      <FooterNavBar
+        navWidth={footerLayout.navWidth}
+        variant={footerLayout.variant}
+        leading={
+          searchActive ? (
             <button className="footer-icon footer-icon--light" type="button" onClick={onSearchPrevious} aria-label="Previous search result">
               <Icon name="arrow-up" size={16} />
             </button>
-
-            <div className="footer-search-meta">{searchHitLabel ?? 'No hits'}</div>
-
-            <button className="footer-icon footer-icon--light" type="button" onClick={onSearchNext} aria-label="Next search result">
-              <Icon name="arrow-down" size={16} />
-            </button>
-          </>
-        ) : (
-          <>
+          ) : (
             <button className="footer-icon footer-icon--light" type="button" onClick={onOpenSearch} aria-label="Search">
               <Icon name="search" size={18} />
             </button>
-
-            {footerAction === 'new-tab' ? (
+          )
+        }
+        center={
+          searchActive ? (
+            <div className="footer-search-meta">{searchHitLabel ?? 'No hits'}</div>
+          ) : footerAction === 'new-tab' ? (
+            <button
+              ref={registerFooterActionNode}
+              className={`footer-action footer-action--primary ${maskFooterAction ? 'footer-action--masked' : ''}`}
+              type="button"
+              onClick={onCreateChat}
+              aria-label="Create a new tab"
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          ) : (
+            <button
+              className="footer-action footer-action--tabs"
+              type="button"
+              onClick={onOpenTabs}
+              aria-label="Open tabs"
+            >
+              <span>{openTabCount}</span>
+            </button>
+          )
+        }
+        trailing={
+          searchActive ? (
+            <button className="footer-icon footer-icon--light" type="button" onClick={onSearchNext} aria-label="Next search result">
+              <Icon name="arrow-down" size={16} />
+            </button>
+          ) : (
+            <div className="footer-menu">
               <button
-                ref={registerFooterActionNode}
-                className={`footer-action footer-action--primary ${maskFooterAction ? 'footer-action--masked' : ''}`}
+                className="footer-icon footer-icon--muted"
                 type="button"
-                onClick={onCreateChat}
-                aria-label="Create a new tab"
+                onClick={() => {
+                  if (accessMode) {
+                    setMenuOpen((current) => !current);
+                  }
+                }}
+                aria-label="More actions"
+                aria-disabled={!accessMode}
               >
-                <Icon name="plus" size={14} />
+                <Icon name="ellipsis" size={18} />
               </button>
-            ) : (
-              <button
-                className="footer-action footer-action--tabs"
-                type="button"
-                onClick={onOpenTabs}
-                aria-label="Open tabs"
-              >
-                <span>{openTabCount}</span>
-              </button>
-            )}
 
-            {showChatControls ? (
-              <div className="footer-menu">
-                <button
-                  className="footer-icon footer-icon--muted"
-                  type="button"
-                  onClick={() => {
-                    if (accessMode) {
-                      setMenuOpen((current) => !current);
-                    }
-                  }}
-                  aria-label="More actions"
-                  aria-disabled={!accessMode}
-                >
-                  <Icon name="ellipsis" size={18} />
-                </button>
-
-                {menuOpen && accessMode ? (
-                  <div className="footer-menu__panel">
-                    <div className="footer-menu__label">Access</div>
-                    <div className="footer-menu__toggle">
-                      <button
-                        className={`footer-menu__toggle-button ${
-                          accessMode === 'read-only' ? 'footer-menu__toggle-button--active' : ''
-                        }`}
-                        type="button"
-                        onClick={() => {
-                          onToggleAccessMode('read-only');
-                          setMenuOpen(false);
-                        }}
-                      >
-                        Read
-                      </button>
-                      <button
-                        className={`footer-menu__toggle-button ${
-                          accessMode === 'workspace-write' ? 'footer-menu__toggle-button--active' : ''
-                        }`}
-                        type="button"
-                        onClick={() => {
-                          onToggleAccessMode('workspace-write');
-                          setMenuOpen(false);
-                        }}
-                      >
-                        Write
-                      </button>
-                    </div>
-
-                    {onEditDirectories ? (
-                      <button
-                        className="footer-menu__secondary"
-                        type="button"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          onEditDirectories();
-                        }}
-                      >
-                        Edit directories
-                      </button>
-                    ) : null}
+              {menuOpen && accessMode ? (
+                <div className="footer-menu__panel">
+                  <div className="footer-menu__label">Access</div>
+                  <div className="footer-menu__toggle">
+                    <button
+                      className={`footer-menu__toggle-button ${
+                        accessMode === 'read-only' ? 'footer-menu__toggle-button--active' : ''
+                      }`}
+                      type="button"
+                      onClick={() => {
+                        onToggleAccessMode('read-only');
+                        setMenuOpen(false);
+                      }}
+                    >
+                      Read
+                    </button>
+                    <button
+                      className={`footer-menu__toggle-button ${
+                        accessMode === 'workspace-write' ? 'footer-menu__toggle-button--active' : ''
+                      }`}
+                      type="button"
+                      onClick={() => {
+                        onToggleAccessMode('workspace-write');
+                        setMenuOpen(false);
+                      }}
+                    >
+                      Write
+                    </button>
                   </div>
-                ) : null}
-              </div>
-            ) : (
-              <div className="footer-search-meta footer-search-meta--placeholder">Browse tabs</div>
-            )}
-          </>
-        )}
-      </div>
+
+                  {onEditDirectories ? (
+                    <button
+                      className="footer-menu__secondary"
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onEditDirectories();
+                      }}
+                    >
+                      Edit directories
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          )
+        }
+      />
     </div>
   );
 };
