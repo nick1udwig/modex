@@ -1422,6 +1422,7 @@ export const App = () => {
           onOpenNewTerminal={requestNewTerminal}
         />
         <TerminalCreateSheet
+          filesystemClient={filesystemClient}
           open={terminalCreateSheetOpen}
           recentRoots={recentRoots}
           onClose={() => setTerminalCreateSheetOpen(false)}

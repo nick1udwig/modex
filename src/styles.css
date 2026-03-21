@@ -2669,7 +2669,25 @@ textarea:focus-visible {
   align-items: flex-end;
   justify-content: center;
   padding: 16px 12px;
-  animation: fade-in 180ms ease;
+  opacity: 1;
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sheet-overlay--closing {
+  opacity: 0;
+}
+
+.sheet-panel {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sheet-panel--closing {
+  opacity: 0;
+  transform: translateY(30px);
 }
 
 .picker-sheet {
@@ -2686,7 +2704,6 @@ textarea:focus-visible {
   flex-direction: column;
   gap: 14px;
   overflow: auto;
-  animation: sheet-rise 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .picker-sheet__header {
@@ -2846,6 +2863,20 @@ textarea:focus-visible {
 .picker-sheet__primary:disabled,
 .picker-sheet__secondary:disabled {
   opacity: 0.5;
+}
+
+.terminal-create-sheet__panel {
+  width: min(382px, 100%);
+  height: auto;
+  max-height: min(680px, calc(100dvh - max(12px, env(safe-area-inset-top))));
+}
+
+.terminal-create-sheet__panel .settings-sheet__form-body {
+  padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
+}
+
+.terminal-create-sheet__panel--browse {
+  max-height: min(720px, calc(100dvh - max(12px, env(safe-area-inset-top))));
 }
 
 @keyframes fade-in {

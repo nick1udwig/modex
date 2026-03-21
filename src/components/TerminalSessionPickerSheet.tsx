@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { terminalStatusLabel } from '../app/tabs';
 import type { RemoteTerminalClient, TerminalSessionSummary } from '../app/types';
+import { SlidingBottomSheet } from './SlidingBottomSheet';
 
 interface TerminalSessionPickerSheetProps {
   client: RemoteTerminalClient;
@@ -46,19 +47,14 @@ export const TerminalSessionPickerSheet = ({ client, onClose, onSelect, open }: 
     };
   }, [client, open]);
 
-  if (!open) {
-    return null;
-  }
-
   return (
-    <div className="sheet-overlay" role="presentation" onClick={onClose}>
-      <section
-        className="picker-sheet picker-sheet--sessions"
-        aria-label="Connect an existing tmuy session"
-        onClick={(event) => {
-          event.stopPropagation();
-        }}
-      >
+    <SlidingBottomSheet
+      ariaLabel="Connect an existing tmuy session"
+      open={open}
+      onClose={onClose}
+      panelClassName="picker-sheet picker-sheet--sessions"
+    >
+      <>
         <div className="picker-sheet__header">
           <p className="picker-sheet__eyebrow">Existing tmuy session</p>
           <h2 className="picker-sheet__title">Reconnect a terminal tab.</h2>
@@ -81,7 +77,7 @@ export const TerminalSessionPickerSheet = ({ client, onClose, onSelect, open }: 
             ))}
           </div>
         ) : null}
-      </section>
-    </div>
+      </>
+    </SlidingBottomSheet>
   );
 };

@@ -1,3 +1,5 @@
+import { SlidingBottomSheet } from './SlidingBottomSheet';
+
 interface NewTabSheetProps {
   onClose: () => void;
   onOpenExistingTerminal: () => void;
@@ -13,19 +15,9 @@ export const NewTabSheet = ({
   onOpenNewTerminal,
   open,
 }: NewTabSheetProps) => {
-  if (!open) {
-    return null;
-  }
-
   return (
-    <div className="sheet-overlay" role="presentation" onClick={onClose}>
-      <section
-        className="picker-sheet"
-        aria-label="Create a new tab"
-        onClick={(event) => {
-          event.stopPropagation();
-        }}
-      >
+    <SlidingBottomSheet ariaLabel="Create a new tab" open={open} onClose={onClose} panelClassName="picker-sheet">
+      <>
         <div className="picker-sheet__header">
           <p className="picker-sheet__eyebrow">New tab</p>
           <h2 className="picker-sheet__title">Choose what this tab should host.</h2>
@@ -47,7 +39,7 @@ export const NewTabSheet = ({
             <span className="picker-sheet__action-copy">Reconnect a tab to a live or exited terminal session.</span>
           </button>
         </div>
-      </section>
-    </div>
+      </>
+    </SlidingBottomSheet>
   );
 };
