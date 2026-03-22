@@ -3,6 +3,8 @@ export interface ViewportSize {
   width: number;
 }
 
+const KEYBOARD_VIEWPORT_DELTA_PX = 160;
+
 interface ViewportWindowLike {
   innerHeight: number;
   innerWidth: number;
@@ -22,11 +24,12 @@ export const shouldUseWideShell = ({ height, width }: ViewportSize) => width >= 
 
 export const resolveViewportSize = (windowLike: ViewportWindowLike): ViewportSize => {
   const visualViewportHeight = windowLike.visualViewport
-    ? windowLike.visualViewport.height + (windowLike.visualViewport.offsetTop ?? 0)
+    ? Math.round(windowLike.visualViewport.height + (windowLike.visualViewport.offsetTop ?? 0))
     : windowLike.innerHeight;
+  const shouldUseVisualViewportHeight = windowLike.innerHeight - visualViewportHeight > KEYBOARD_VIEWPORT_DELTA_PX;
 
   return {
-    height: Math.min(windowLike.innerHeight, Math.round(visualViewportHeight)),
+    height: shouldUseVisualViewportHeight ? Math.min(windowLike.innerHeight, visualViewportHeight) : windowLike.innerHeight,
     width: windowLike.visualViewport?.width ?? windowLike.innerWidth,
   };
 };

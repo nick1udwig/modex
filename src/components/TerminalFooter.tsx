@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { FooterNavBar } from './FooterNavBar';
 import { Icon } from './Icon';
+import { focusTextInputWithoutPageJump } from './textInputFocus';
 import {
   TERMINAL_SHORTCUT_BUTTONS,
   type TerminalModifierState,
@@ -67,23 +68,11 @@ export const TerminalFooter = ({
   };
 
   const focusSearchInput = () => {
-    const input = searchInputRef.current;
-    if (!input) {
-      return;
-    }
-
-    input.focus({ preventScroll: true });
-    const selectionPoint = input.value.length;
-    input.setSelectionRange(selectionPoint, selectionPoint);
+    focusTextInputWithoutPageJump(searchInputRef.current, document.activeElement);
   };
 
   const handleSearchInputPress = (input: HTMLInputElement, event: { preventDefault: () => void }) => {
-    if (document.activeElement === input) {
-      return;
-    }
-
-    event.preventDefault();
-    focusSearchInput();
+    focusTextInputWithoutPageJump(input, document.activeElement, event);
   };
 
   return (

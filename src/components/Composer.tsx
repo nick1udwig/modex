@@ -5,6 +5,7 @@ import { resolveComposerFooterLayout } from './composerFooterModel';
 import { FooterNavBar } from './FooterNavBar';
 import { Icon } from './Icon';
 import { InteractionPrompt } from './InteractionPrompt';
+import { focusTextInputWithoutPageJump } from './textInputFocus';
 
 type FooterAction = 'tabs' | 'new-tab';
 type ComposerMode = 'chat' | 'tabs';
@@ -150,6 +151,10 @@ export const Composer = ({
     });
   }, [slashCommands]);
 
+  const handleInputPress = (event: { preventDefault: () => void }) => {
+    focusTextInputWithoutPageJump(inputRef.current, document.activeElement, event);
+  };
+
   return (
     <div ref={composerRef} className={`composer-shell ${searchActive ? 'composer-shell--search' : ''}`}>
       {showChatControls && interactionRequest ? (
@@ -206,6 +211,8 @@ export const Composer = ({
               disabled={!searchActive && !showChatControls ? true : inputDisabled}
               placeholder={searchActive ? 'Search query' : 'Ask anything'}
               aria-label={searchActive ? 'Search query' : 'Ask anything'}
+              onMouseDown={handleInputPress}
+              onTouchStart={handleInputPress}
               onChange={(event) => (searchActive ? onSearchQueryChange(event.target.value) : onDraftChange(event.target.value))}
               onKeyDown={(event) => {
                 if ((!showChatControls && !searchActive) || inputDisabled) {

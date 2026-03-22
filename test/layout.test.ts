@@ -31,3 +31,21 @@ test('resolveViewportSize uses the visual viewport height when the mobile keyboa
     },
   );
 });
+
+test('resolveViewportSize ignores small visual viewport shifts from browser chrome changes', () => {
+  assert.deepEqual(
+    resolveViewportSize({
+      innerHeight: 844,
+      innerWidth: 390,
+      visualViewport: {
+        height: 760,
+        offsetTop: 0,
+        width: 390,
+      },
+    }),
+    {
+      height: 844,
+      width: 390,
+    },
+  );
+});
